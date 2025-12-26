@@ -48,10 +48,14 @@ jobs:
 
       - name: Deploy App + Monitoring
         uses: appleboy/ssh-action@v0.1.7
+        env:
+          MON_STACK: ${{ env.MON_STACK }}
+          SWARM_STACK: ${{ env.SWARM_STACK }}
         with:
           host: ${{ secrets.SWARM_MANAGER_HOST }}
           username: ${{ secrets.SSH_USERNAME }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: MON_STACK,SWARM_STACK
           script: |
             # Create secrets if they don't exist
             docker secret ls | grep -q mysql_root_password || \

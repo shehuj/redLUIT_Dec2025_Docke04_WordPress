@@ -1,0 +1,21 @@
+---
+# Global variables for all hosts
+
+# Docker configuration
+docker_edition: 'ce'
+docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin
+
+# System configuration
+timezone: 'UTC'
+
+# SSH hardening
+ssh_port: 22
+ssh_password_authentication: 'no'
+ssh_permit_root_login: 'no'
+ssh_pubkey_authentication: 'yes'
+ssh_allow_users: ['ubuntu']

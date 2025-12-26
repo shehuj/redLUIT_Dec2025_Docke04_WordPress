@@ -70,9 +70,50 @@ A production-ready Docker Swarm deployment featuring WordPress and MySQL with in
 └─────────────────────────────────────────────────────────┘
 ```
 
+## Infrastructure Provisioning
+
+This repository includes **automated infrastructure provisioning** using Terraform and Ansible to create a production-grade Docker Swarm cluster on AWS EC2.
+
+### Automated Provisioning Features
+- **Terraform**: Provisions AWS VPC, EC2 instances (1 manager + 2 workers), security groups
+- **Ansible**: Installs Docker, initializes Swarm, creates secrets, applies security hardening
+- **GitHub Actions**: Automated workflow for infrastructure deployment
+- **Security**: SSH hardening, UFW firewall, encrypted volumes
+
+### Quick Start - Infrastructure
+
+1. **Configure GitHub Secrets** (Settings → Secrets and variables → Actions):
+   - `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
+   - `SSH_PUBLIC_KEY`, `SSH_PRIVATE_KEY`
+   - `MYSQL_ROOT_PASSWORD`, `MYSQL_PASSWORD`, `SLACK_WEBHOOK_URL`
+
+2. **Trigger Infrastructure Workflow**:
+   ```bash
+   # Make changes to infra/ directory and push to main
+   git push origin main
+   ```
+
+3. **Update Deployment Secret**:
+   - After provisioning, update `SWARM_MANAGER_HOST` secret with manager IP from workflow output
+
+For detailed infrastructure provisioning guide, see [docs/INFRASTRUCTURE_GUIDE.md](docs/INFRASTRUCTURE_GUIDE.md).
+
+For security hardening details, see [docs/SECURITY_HARDENING.md](docs/SECURITY_HARDENING.md).
+
 ## Prerequisites
 
-### Docker Swarm Cluster
+### Option 1: Automated Infrastructure (Recommended)
+Use the infrastructure provisioning workflow to automatically create:
+- AWS VPC with public/private subnets
+- 3 EC2 instances (1 manager + 2 workers, Ubuntu 22.04, t3.medium)
+- Security groups for Swarm communication
+- Docker installation and Swarm initialization
+- Cost: ~$143-183/month
+
+See [Infrastructure Provisioning](#infrastructure-provisioning) above.
+
+### Option 2: Manual Docker Swarm Cluster
+If you have your own infrastructure:
 - Minimum: 1 manager node
 - Recommended: 1 manager + 2 worker nodes
 - Docker Engine 20.10+ with Swarm mode enabled

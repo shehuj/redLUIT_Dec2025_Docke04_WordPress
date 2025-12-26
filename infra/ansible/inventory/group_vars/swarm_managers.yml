@@ -1,0 +1,15 @@
+---
+# Swarm manager specific variables
+
+swarm_role: manager
+swarm_advertise_addr: "{{ ansible_default_ipv4.address }}"
+swarm_listen_addr: "0.0.0.0:2377"
+
+# Secrets to create on manager
+docker_secrets:
+  - name: mysql_root_password
+    value: "{{ lookup('env', 'MYSQL_ROOT_PASSWORD') }}"
+  - name: mysql_password
+    value: "{{ lookup('env', 'MYSQL_PASSWORD') }}"
+  - name: slack_webhook_url
+    value: "{{ lookup('env', 'SLACK_WEBHOOK_URL') }}"
