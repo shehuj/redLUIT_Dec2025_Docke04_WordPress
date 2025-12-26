@@ -1,0 +1,30 @@
+groups:
+  - name: docker-swarm-alerts
+    rules:
+
+    - alert: InstanceDown
+      expr: up == 0
+      for: 2m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Instance {{ $labels.instance }} down"
+        description: "No metrics from {{ $labels.job }} on {{ $labels.instance }} for > 2m"
+
+    - alert: ContainerUnhealthy
+      expr: increase(container_healthcheck_status_unhealthy[5m]) > 0
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Unhealthy container detected"
+        description: "One or more containers failing healthchecks for over 5m"
+
+    - alert: ServiceNotAtDesiredReplicas
+      expr: sum(container_spec_replicas_desired - container_spec_replicas_running) > 0
+      for: 3m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Service not at desired replicas"
+        description: "Some services have fewer running replicas than desired"

@@ -1,0 +1,84 @@
+version: "3.8"
+
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    networks:
+      - mon_net
+    ports:
+      - "9090:9090"
+    volumes:
+      - prometheus_data:/prometheus
+    configs:
+      - source: prometheus_config
+        target: /etc/prometheus/prometheus.yml
+      - source: prometheus_rules
+        target: /etc/prometheus/alert.rules.yml
+    deploy:
+      replicas: 1
+
+  grafana:
+    image: grafana/grafana:latest
+    networks:
+      - mon_net
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    deploy:
+      replicas: 1
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    networks:
+      - mon_net
+    ports:
+      - "9093:9093"
+    configs:
+      - source: alertmanager_config
+        target: /etc/alertmanager/alertmanager.yml
+    secrets:
+      - slack_webhook_url
+    environment:
+      SLACK_WEBHOOK_URL_FILE: /run/secrets/slack_webhook_url
+    deploy:
+      replicas: 1
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.45.0
+    networks:
+      - mon_net
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    deploy:
+      mode: global
+
+  node_exporter:
+    image: prom/node-exporter:latest
+    networks:
+      - mon_net
+    deploy:
+      mode: global
+
+networks:
+  mon_net:
+    driver: overlay
+
+volumes:
+  prometheus_data:
+  grafana_data:
+
+configs:
+  prometheus_config:
+    file: ./prometheus.yml
+  prometheus_rules:
+    file: ./alert.rules.yml
+  alertmanager_config:
+    file: ./alertmanager.yml
+
+secrets:
+  slack_webhook_url:
+    external: true

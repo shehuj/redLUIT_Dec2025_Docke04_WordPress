@@ -1,0 +1,44 @@
+# Git files
+.git/
+.gitignore
+.gitattributes
+
+# GitHub workflows
+.github/
+
+# Documentation
+README.md
+LICENSE
+*.md
+docs/
+
+# Tests
+tests/
+.pytest_cache/
+*.pytest_cache/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.egg-info/
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+
+# CI/CD artifacts
+.coverage
+htmlcov/

@@ -1,0 +1,4 @@
+# Python dependencies for testing and compliance checks
+pytest>=8.0.0
+flake8>=7.0.0
+pyyaml>=6.0.0
