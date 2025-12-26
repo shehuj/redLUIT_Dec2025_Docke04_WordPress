@@ -224,5 +224,6 @@ override.tf.json
 # Ansible
 *.retry
 .ansible/
-infra/ansible/inventory/hosts.ini
+# Note: hosts.ini is a template that gets overwritten by Terraform output
+# Keep it in repo as a template for manual setup
 /tmp/ansible-swarm.log
