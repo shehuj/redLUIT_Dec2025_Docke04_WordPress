@@ -1,0 +1,4 @@
+---
+# Swarm worker specific variables
+
+swarm_role: worker

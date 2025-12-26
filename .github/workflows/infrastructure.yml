@@ -1,0 +1,264 @@
+name: Infrastructure Provisioning
+
+on:
+  # Trigger on PR to dev branch for validation and provisioning
+  pull_request:
+    branches: ["dev"]
+    paths:
+      - 'infra/**'
+      - '.github/workflows/infrastructure.yml'
+
+  # Trigger on merge to main for production deployment
+  push:
+    branches: ["main"]
+    paths:
+      - 'infra/**'
+      - '.github/workflows/infrastructure.yml'
+
+  # Manual trigger for ad-hoc provisioning
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Infrastructure action to perform'
+        required: true
+        default: 'plan'
+        type: choice
+        options:
+          - plan
+          - apply
+          - destroy
+
+env:
+  TF_VERSION: '1.6.0'
+  ANSIBLE_VERSION: '2.15.0'
+  AWS_REGION: us-east-1
+
+jobs:
+  # Job 1: Validate Terraform configuration
+  validate-terraform:
+    name: Validate Terraform
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+
+      - name: Terraform Init
+        run: terraform init -backend=false
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan (Dry Run)
+        if: github.event_name == 'pull_request'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
+        run: |
+          terraform init
+          terraform plan -input=false -no-color
+
+  # Job 2: Validate Ansible playbooks and roles
+  validate-ansible:
+    name: Validate Ansible
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Ansible and dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible==${{ env.ANSIBLE_VERSION }} ansible-lint yamllint
+
+      - name: Ansible Syntax Check
+        working-directory: infra/ansible
+        run: |
+          ansible-playbook playbooks/site.yml --syntax-check
+          ansible-playbook playbooks/swarm-setup.yml --syntax-check
+
+      - name: Ansible Lint
+        working-directory: infra/ansible
+        run: ansible-lint playbooks/ roles/
+        continue-on-error: true
+
+      - name: YAML Lint
+        working-directory: infra/ansible
+        run: yamllint playbooks/ roles/ inventory/group_vars/
+        continue-on-error: true
+
+  # Job 3: Run infrastructure compliance tests
+  compliance-checks:
+    name: Infrastructure Compliance
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run infrastructure compliance tests
+        run: |
+          pytest tests/test_infrastructure.py -v
+
+  # Job 4: Provision infrastructure with Terraform
+  # Only runs after ALL validation jobs succeed
+  provision-infrastructure:
+    name: Provision AWS Infrastructure
+    needs: [validate-terraform, validate-ansible, compliance-checks]
+    runs-on: ubuntu-latest
+    # Run on PR to dev OR push to main
+    if: |
+      (github.event_name == 'pull_request' && github.base_ref == 'dev') ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    defaults:
+      run:
+        working-directory: infra/terraform
+
+    outputs:
+      manager_ip: ${{ steps.terraform_outputs.outputs.manager_ip }}
+      worker_ips: ${{ steps.terraform_outputs.outputs.worker_ips }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Plan
+        env:
+          TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
+        run: terraform plan -input=false -out=tfplan
+
+      - name: Terraform Apply
+        env:
+          TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
+        run: terraform apply -auto-approve tfplan
+
+      - name: Get Terraform Outputs
+        id: terraform_outputs
+        run: |
+          echo "manager_ip=$(terraform output -raw swarm_manager_public_ip)" >> $GITHUB_OUTPUT
+          echo "worker_ips=$(terraform output -json swarm_worker_public_ips | jq -r '. | join(",")')" >> $GITHUB_OUTPUT
+
+      - name: Generate Ansible Inventory
+        run: |
+          terraform output -raw ansible_inventory > ../../infra/ansible/inventory/hosts.ini
+
+      - name: Upload Ansible Inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: ansible-inventory
+          path: infra/ansible/inventory/hosts.ini
+          retention-days: 1
+
+  # Job 5: Configure Swarm cluster with Ansible
+  # Only runs after provision-infrastructure succeeds
+  configure-swarm:
+    name: Configure Swarm Cluster
+    needs: provision-infrastructure
+    runs-on: ubuntu-latest
+    # Run on PR to dev OR push to main (same condition as provision)
+    if: |
+      (github.event_name == 'pull_request' && github.base_ref == 'dev') ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Ansible Inventory
+        uses: actions/download-artifact@v4
+        with:
+          name: ansible-inventory
+          path: infra/ansible/inventory/
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Ansible
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible==${{ env.ANSIBLE_VERSION }}
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ needs.provision-infrastructure.outputs.manager_ip }} >> ~/.ssh/known_hosts
+
+      - name: Wait for instances to be ready
+        run: |
+          sleep 60  # Allow instances to fully boot
+
+      - name: Run Ansible playbook
+        working-directory: infra/ansible
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          ANSIBLE_HOST_KEY_CHECKING: False
+        run: |
+          ansible-playbook -i inventory/hosts.ini playbooks/site.yml -v
+
+      - name: Verify Swarm cluster
+        env:
+          MANAGER_IP: ${{ needs.provision-infrastructure.outputs.manager_ip }}
+        run: |
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} 'docker node ls'
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} 'docker secret ls'
+
+      - name: Display infrastructure outputs
+        run: |
+          echo "Infrastructure provisioning complete!"
+          echo "Manager IP: ${{ needs.provision-infrastructure.outputs.manager_ip }}"
+          echo "Worker IPs: ${{ needs.provision-infrastructure.outputs.worker_ips }}"
+          echo ""
+          echo "Next steps:"
+          echo "1. Update GitHub secret SWARM_MANAGER_HOST with manager IP: ${{ needs.provision-infrastructure.outputs.manager_ip }}"
+          echo "2. Run deployment workflow to deploy WordPress and monitoring stacks"

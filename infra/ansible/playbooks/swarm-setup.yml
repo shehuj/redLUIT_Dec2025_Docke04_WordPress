@@ -1,0 +1,14 @@
+---
+# Swarm cluster initialization only (assumes Docker already installed)
+
+- name: Initialize Docker Swarm cluster
+  hosts: swarm
+  become: yes
+  roles:
+    - swarm-init
+
+- name: Create Docker secrets
+  hosts: swarm_managers
+  become: yes
+  roles:
+    - swarm-secrets

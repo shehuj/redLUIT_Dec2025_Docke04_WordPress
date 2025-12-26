@@ -1,0 +1,103 @@
+---
+# SSH security hardening
+
+- name: Ensure SSH directory exists
+  file:
+    path: /home/ubuntu/.ssh
+    state: directory
+    owner: ubuntu
+    group: ubuntu
+    mode: '0700'
+
+- name: Disable SSH password authentication
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?PasswordAuthentication'
+    line: 'PasswordAuthentication no'
+    state: present
+  notify: restart sshd
+
+- name: Disable root login
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?PermitRootLogin'
+    line: 'PermitRootLogin no'
+    state: present
+  notify: restart sshd
+
+- name: Enable public key authentication
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?PubkeyAuthentication'
+    line: 'PubkeyAuthentication yes'
+    state: present
+  notify: restart sshd
+
+- name: Disable empty passwords
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?PermitEmptyPasswords'
+    line: 'PermitEmptyPasswords no'
+    state: present
+  notify: restart sshd
+
+- name: Configure SSH MaxAuthTries
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?MaxAuthTries'
+    line: 'MaxAuthTries 3'
+    state: present
+  notify: restart sshd
+
+- name: Install UFW firewall
+  apt:
+    name: ufw
+    state: present
+    update_cache: yes
+
+- name: Configure UFW firewall - Allow SSH
+  ufw:
+    rule: allow
+    port: '22'
+    proto: tcp
+
+- name: Configure UFW firewall - Allow Docker Swarm ports (TCP)
+  ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+  loop:
+    - '2377'  # Swarm management
+    - '7946'  # Swarm communication
+
+- name: Configure UFW firewall - Allow Docker overlay network (UDP)
+  ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: udp
+  loop:
+    - '4789'  # Overlay network
+    - '7946'  # Swarm communication
+
+- name: Configure UFW firewall - Allow HTTP/HTTPS
+  ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+  loop:
+    - '80'
+    - '443'
+
+- name: Configure UFW firewall - Allow monitoring ports
+  ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+  loop:
+    - '3000'  # Grafana
+    - '9090'  # Prometheus
+    - '9093'  # AlertManager
+
+- name: Enable UFW
+  ufw:
+    state: enabled

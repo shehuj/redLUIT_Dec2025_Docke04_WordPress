@@ -1,0 +1,43 @@
+---
+# Main orchestration playbook for complete Swarm cluster setup
+
+- name: Configure all Swarm nodes - Install Docker and harden security
+  hosts: swarm
+  become: yes
+  roles:
+    - docker-engine
+    - security-hardening
+
+- name: Initialize Docker Swarm cluster
+  hosts: swarm
+  become: yes
+  roles:
+    - swarm-init
+
+- name: Create Docker secrets on manager
+  hosts: swarm_managers
+  become: yes
+  roles:
+    - swarm-secrets
+
+- name: Verify Swarm cluster health
+  hosts: swarm_managers
+  become: yes
+  tasks:
+    - name: Check Swarm nodes
+      command: docker node ls
+      register: swarm_nodes
+      changed_when: false
+
+    - name: Display Swarm cluster status
+      debug:
+        msg: "{{ swarm_nodes.stdout_lines }}"
+
+    - name: Check Docker secrets
+      command: docker secret ls
+      register: secrets
+      changed_when: false
+
+    - name: Display Docker secrets
+      debug:
+        msg: "{{ secrets.stdout_lines }}"

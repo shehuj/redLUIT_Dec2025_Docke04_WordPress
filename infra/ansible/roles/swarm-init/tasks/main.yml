@@ -1,0 +1,47 @@
+---
+# Docker Swarm initialization
+
+- name: Check if Swarm is already initialized
+  command: docker info --format '{{.Swarm.LocalNodeState}}'
+  register: swarm_status
+  changed_when: false
+  failed_when: false
+
+- name: Initialize Docker Swarm on manager
+  command: >
+    docker swarm init
+    --advertise-addr {{ ansible_default_ipv4.address }}
+  when:
+    - inventory_hostname in groups['swarm_managers']
+    - swarm_status.stdout != 'active'
+  register: swarm_init_result
+
+- name: Get worker join token
+  command: docker swarm join-token -q worker
+  register: worker_token
+  when: inventory_hostname in groups['swarm_managers']
+  changed_when: false
+  delegate_to: "{{ groups['swarm_managers'][0] }}"
+  run_once: true
+
+- name: Join workers to Swarm
+  command: >
+    docker swarm join
+    --token {{ worker_token.stdout }}
+    {{ hostvars[groups['swarm_managers'][0]]['ansible_default_ipv4']['address'] }}:2377
+  when:
+    - inventory_hostname in groups['swarm_workers']
+    - swarm_status.stdout != 'active'
+
+- name: Verify Swarm cluster status
+  command: docker node ls
+  register: node_list
+  when: inventory_hostname in groups['swarm_managers']
+  changed_when: false
+
+- name: Display Swarm cluster nodes
+  debug:
+    msg: "{{ node_list.stdout_lines }}"
+  when:
+    - inventory_hostname in groups['swarm_managers']
+    - node_list is defined

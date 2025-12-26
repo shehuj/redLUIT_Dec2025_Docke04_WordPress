@@ -9,4 +9,4 @@ receivers:
     slack_configs:
       - send_resolved: true
         channel: "#alerts"
-        api_url: "${SLACK_WEBHOOK_URL}"
+        api_url_file: /run/secrets/slack_webhook_url

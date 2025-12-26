@@ -1,0 +1,45 @@
+---
+# Create Docker secrets for WordPress and monitoring
+
+- name: Check existing Docker secrets
+  command: docker secret ls --format '{{.Name}}'
+  register: existing_secrets
+  when: inventory_hostname in groups['swarm_managers']
+  changed_when: false
+
+- name: Create mysql_root_password secret
+  shell: |
+    echo "{{ lookup('env', 'MYSQL_ROOT_PASSWORD') }}" | docker secret create mysql_root_password -
+  when:
+    - inventory_hostname in groups['swarm_managers']
+    - "'mysql_root_password' not in existing_secrets.stdout_lines"
+  no_log: true
+
+- name: Create mysql_password secret
+  shell: |
+    echo "{{ lookup('env', 'MYSQL_PASSWORD') }}" | docker secret create mysql_password -
+  when:
+    - inventory_hostname in groups['swarm_managers']
+    - "'mysql_password' not in existing_secrets.stdout_lines"
+  no_log: true
+
+- name: Create slack_webhook_url secret
+  shell: |
+    echo "{{ lookup('env', 'SLACK_WEBHOOK_URL') }}" | docker secret create slack_webhook_url -
+  when:
+    - inventory_hostname in groups['swarm_managers']
+    - "'slack_webhook_url' not in existing_secrets.stdout_lines"
+  no_log: true
+
+- name: Verify Docker secrets created
+  command: docker secret ls
+  register: secrets_list
+  when: inventory_hostname in groups['swarm_managers']
+  changed_when: false
+
+- name: Display created secrets
+  debug:
+    msg: "{{ secrets_list.stdout_lines }}"
+  when:
+    - inventory_hostname in groups['swarm_managers']
+    - secrets_list is defined

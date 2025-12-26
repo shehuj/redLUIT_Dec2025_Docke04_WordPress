@@ -1,0 +1,31 @@
+# Example Terraform variables file
+# Copy this file to terraform.tfvars and update with your values
+
+aws_region = "us-east-1"
+project_name = "wordpress-swarm"
+environment = "production"
+
+# Network configuration
+vpc_cidr = "10.0.0.0/16"
+availability_zones = ["us-east-1a", "us-east-1b"]
+
+# SECURITY: Restrict SSH access to your IP address
+# Example: ["203.0.113.0/32"]  # Replace with your IP
+allowed_ssh_cidrs = ["0.0.0.0/0"]  # WARNING: Open to all - change in production!
+
+# SECURITY: Restrict monitoring access
+# Example: ["203.0.113.0/32"]  # Replace with your IP
+allowed_monitoring_cidrs = ["0.0.0.0/0"]  # WARNING: Open to all - change in production!
+
+# SSH public key for EC2 access
+# Example: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQ... user@hostname"
+ssh_public_key = "YOUR_SSH_PUBLIC_KEY_HERE"
+
+# Instance configuration
+manager_instance_type = "t3.medium"
+worker_instance_type = "t3.medium"
+worker_count = 2
+
+# Storage configuration (GB)
+manager_root_volume_size = 30
+worker_root_volume_size = 30
