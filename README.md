@@ -96,6 +96,11 @@ This repository includes **automated infrastructure provisioning** using Terrafo
 3. **Update Deployment Secret**:
    - After provisioning, update `SWARM_MANAGER_HOST` secret with manager IP from workflow output
 
+4. **Infrastructure Cleanup** (when needed):
+   - **GitHub Actions → Infrastructure Cleanup → Run workflow**
+   - Type `DESTROY` to confirm and select action (plan-destroy or destroy)
+   - This permanently deletes all AWS resources and data
+
 For detailed infrastructure provisioning guide, see [docs/INFRASTRUCTURE_GUIDE.md](docs/INFRASTRUCTURE_GUIDE.md).
 
 For security hardening details, see [docs/SECURITY_HARDENING.md](docs/SECURITY_HARDENING.md).
@@ -168,9 +173,25 @@ Configure these secrets in your GitHub repository:
 .
 ├── .github/
 │   └── workflows/
-│       ├── deploy.yml           # Main deployment workflow
-│       ├── compliance.yml       # Compliance checks on PRs
-│       └── python.yml           # Python environment tests
+│       ├── deploy.yml                  # Main deployment workflow
+│       ├── infrastructure.yml          # Infrastructure provisioning (Terraform + Ansible)
+│       ├── infrastructure-cleanup.yml  # Infrastructure cleanup (manual trigger only)
+│       ├── compliance.yml              # Compliance checks on PRs
+│       └── python.yml                  # Python environment tests
+├── infra/
+│   ├── terraform/                      # AWS infrastructure as code
+│   │   ├── main.tf                     # Provider and data sources
+│   │   ├── variables.tf                # Input variables
+│   │   ├── outputs.tf                  # Outputs for Ansible
+│   │   ├── vpc.tf                      # VPC, subnets, gateways
+│   │   ├── security-groups.tf          # Security groups
+│   │   ├── ec2.tf                      # EC2 instances
+│   │   └── user-data.sh                # Instance initialization
+│   └── ansible/                        # Configuration management
+│       ├── ansible.cfg                 # Ansible configuration
+│       ├── inventory/                  # Inventory files
+│       ├── playbooks/                  # Ansible playbooks
+│       └── roles/                      # Ansible roles
 ├── stack-app/
 │   └── docker-stack.yml         # WordPress + MySQL stack definition
 ├── stack-monitoring/

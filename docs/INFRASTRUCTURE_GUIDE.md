@@ -179,6 +179,69 @@ Solution:
 3. Wait 60s for instances to boot
 ```
 
+## Infrastructure Cleanup
+
+### ⚠️ Destroying Infrastructure (Manual Trigger Only)
+
+The cleanup workflow destroys all provisioned AWS resources. This is a **DESTRUCTIVE** operation.
+
+**GitHub Actions (Recommended):**
+
+1. Navigate to: **GitHub → Actions → Infrastructure Cleanup → Run workflow**
+2. Enter confirmation: Type `DESTROY` exactly
+3. Select action:
+   - **plan-destroy**: Show what will be destroyed (safe, no changes)
+   - **destroy**: Actually destroy resources (destructive!)
+4. Click "Run workflow"
+
+**Workflow behavior:**
+- Shows destroy plan with all resources to be removed
+- Requires typing "DESTROY" as confirmation
+- Waits 10 seconds before executing (final warning)
+- Destroys all resources: EC2, VPC, security groups, key pairs
+- Verifies destruction completed
+
+**Manual cleanup with Terraform:**
+
+```bash
+cd infra/terraform
+
+# Review what will be destroyed
+terraform plan -destroy
+
+# Destroy infrastructure
+terraform destroy
+
+# Confirm by typing: yes
+```
+
+### What Gets Destroyed
+
+When you run cleanup, ALL of the following are permanently deleted:
+- ✗ VPC and all networking (subnets, IGW, NAT gateway, route tables)
+- ✗ All EC2 instances (manager + workers)
+- ✗ All security groups
+- ✗ SSH key pairs
+- ✗ **All data on instances** (WordPress data, MySQL data, monitoring data)
+
+### Post-Cleanup Actions
+
+After destroying infrastructure:
+1. Verify in AWS Console all resources are gone
+2. Check for orphaned resources (EBS snapshots, Elastic IPs)
+3. Remove `SWARM_MANAGER_HOST` from GitHub secrets
+4. Clean up local Terraform state if needed:
+   ```bash
+   cd infra/terraform
+   rm -rf .terraform terraform.tfstate*
+   ```
+
+### Cost Savings
+
+Destroying infrastructure stops all AWS charges:
+- **Before**: ~$143-183/month
+- **After**: $0/month (assuming no orphaned resources)
+
 ## Next Steps
 
 1. Update `SWARM_MANAGER_HOST` secret with manager IP
