@@ -84,6 +84,12 @@ def test_infrastructure_workflow_exists():
     assert workflow_file.exists(), "infrastructure.yml workflow not found"
 
 
+def test_infrastructure_cleanup_workflow_exists():
+    """Test that infrastructure cleanup workflow exists."""
+    workflow_file = REPO_ROOT / ".github" / "workflows" / "infrastructure-cleanup.yml"
+    assert workflow_file.exists(), "infrastructure-cleanup.yml workflow not found"
+
+
 def test_group_vars_files_exist():
     """Test that group_vars files exist."""
     group_vars_dir = REPO_ROOT / "infra" / "ansible" / "inventory" / "group_vars"
