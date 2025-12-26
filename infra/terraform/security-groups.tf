@@ -13,44 +13,40 @@ resource "aws_security_group" "swarm_manager" {
     cidr_blocks = var.allowed_ssh_cidrs
   }
 
-  # Docker Swarm management port
+  # Docker Swarm management port (self-referencing only, worker added separately)
   ingress {
-    description     = "Docker Swarm management"
-    from_port       = 2377
-    to_port         = 2377
-    protocol        = "tcp"
-    security_groups = [aws_security_group.swarm_worker.id]
-    self            = true
+    description = "Docker Swarm management"
+    from_port   = 2377
+    to_port     = 2377
+    protocol    = "tcp"
+    self        = true
   }
 
-  # Docker Swarm communication (TCP)
+  # Docker Swarm communication TCP (self-referencing only, worker added separately)
   ingress {
-    description     = "Docker Swarm node communication TCP"
-    from_port       = 7946
-    to_port         = 7946
-    protocol        = "tcp"
-    security_groups = [aws_security_group.swarm_worker.id]
-    self            = true
+    description = "Docker Swarm node communication TCP"
+    from_port   = 7946
+    to_port     = 7946
+    protocol    = "tcp"
+    self        = true
   }
 
-  # Docker Swarm communication (UDP)
+  # Docker Swarm communication UDP (self-referencing only, worker added separately)
   ingress {
-    description     = "Docker Swarm node communication UDP"
-    from_port       = 7946
-    to_port         = 7946
-    protocol        = "udp"
-    security_groups = [aws_security_group.swarm_worker.id]
-    self            = true
+    description = "Docker Swarm node communication UDP"
+    from_port   = 7946
+    to_port     = 7946
+    protocol    = "udp"
+    self        = true
   }
 
-  # Docker overlay network
+  # Docker overlay network (self-referencing only, worker added separately)
   ingress {
-    description     = "Docker overlay network"
-    from_port       = 4789
-    to_port         = 4789
-    protocol        = "udp"
-    security_groups = [aws_security_group.swarm_worker.id]
-    self            = true
+    description = "Docker overlay network"
+    from_port   = 4789
+    to_port     = 4789
+    protocol    = "udp"
+    self        = true
   }
 
   # WordPress HTTP
@@ -132,34 +128,31 @@ resource "aws_security_group" "swarm_worker" {
     cidr_blocks = var.allowed_ssh_cidrs
   }
 
-  # Docker Swarm communication (TCP)
+  # Docker Swarm communication TCP (self-referencing only, manager added separately)
   ingress {
-    description     = "Docker Swarm node communication TCP"
-    from_port       = 7946
-    to_port         = 7946
-    protocol        = "tcp"
-    security_groups = [aws_security_group.swarm_manager.id]
-    self            = true
+    description = "Docker Swarm node communication TCP"
+    from_port   = 7946
+    to_port     = 7946
+    protocol    = "tcp"
+    self        = true
   }
 
-  # Docker Swarm communication (UDP)
+  # Docker Swarm communication UDP (self-referencing only, manager added separately)
   ingress {
-    description     = "Docker Swarm node communication UDP"
-    from_port       = 7946
-    to_port         = 7946
-    protocol        = "udp"
-    security_groups = [aws_security_group.swarm_manager.id]
-    self            = true
+    description = "Docker Swarm node communication UDP"
+    from_port   = 7946
+    to_port     = 7946
+    protocol    = "udp"
+    self        = true
   }
 
-  # Docker overlay network
+  # Docker overlay network (self-referencing only, manager added separately)
   ingress {
-    description     = "Docker overlay network"
-    from_port       = 4789
-    to_port         = 4789
-    protocol        = "udp"
-    security_groups = [aws_security_group.swarm_manager.id]
-    self            = true
+    description = "Docker overlay network"
+    from_port   = 4789
+    to_port     = 4789
+    protocol    = "udp"
+    self        = true
   }
 
   # WordPress HTTP (if WordPress runs on workers)
@@ -188,4 +181,83 @@ resource "aws_security_group" "swarm_worker" {
   lifecycle {
     create_before_destroy = true
   }
+}
+
+# Cross-security group rules (added separately to avoid circular dependency)
+
+# Allow worker nodes to connect to manager Swarm management port
+resource "aws_security_group_rule" "manager_swarm_from_workers" {
+  type                     = "ingress"
+  from_port                = 2377
+  to_port                  = 2377
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.swarm_worker.id
+  security_group_id        = aws_security_group.swarm_manager.id
+  description              = "Docker Swarm management from workers"
+}
+
+# Allow worker-to-manager Swarm communication (TCP port 7946)
+resource "aws_security_group_rule" "manager_swarm_tcp_from_workers" {
+  type                     = "ingress"
+  from_port                = 7946
+  to_port                  = 7946
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.swarm_worker.id
+  security_group_id        = aws_security_group.swarm_manager.id
+  description              = "Docker Swarm node communication TCP from workers"
+}
+
+# Allow worker-to-manager Swarm communication (UDP port 7946)
+resource "aws_security_group_rule" "manager_swarm_udp_from_workers" {
+  type                     = "ingress"
+  from_port                = 7946
+  to_port                  = 7946
+  protocol                 = "udp"
+  source_security_group_id = aws_security_group.swarm_worker.id
+  security_group_id        = aws_security_group.swarm_manager.id
+  description              = "Docker Swarm node communication UDP from workers"
+}
+
+# Allow worker-to-manager overlay network (UDP port 4789)
+resource "aws_security_group_rule" "manager_overlay_from_workers" {
+  type                     = "ingress"
+  from_port                = 4789
+  to_port                  = 4789
+  protocol                 = "udp"
+  source_security_group_id = aws_security_group.swarm_worker.id
+  security_group_id        = aws_security_group.swarm_manager.id
+  description              = "Docker overlay network from workers"
+}
+
+# Allow manager-to-worker Swarm communication (TCP port 7946)
+resource "aws_security_group_rule" "worker_swarm_tcp_from_manager" {
+  type                     = "ingress"
+  from_port                = 7946
+  to_port                  = 7946
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.swarm_manager.id
+  security_group_id        = aws_security_group.swarm_worker.id
+  description              = "Docker Swarm node communication TCP from manager"
+}
+
+# Allow manager-to-worker Swarm communication (UDP port 7946)
+resource "aws_security_group_rule" "worker_swarm_udp_from_manager" {
+  type                     = "ingress"
+  from_port                = 7946
+  to_port                  = 7946
+  protocol                 = "udp"
+  source_security_group_id = aws_security_group.swarm_manager.id
+  security_group_id        = aws_security_group.swarm_worker.id
+  description              = "Docker Swarm node communication UDP from manager"
+}
+
+# Allow manager-to-worker overlay network (UDP port 4789)
+resource "aws_security_group_rule" "worker_overlay_from_manager" {
+  type                     = "ingress"
+  from_port                = 4789
+  to_port                  = 4789
+  protocol                 = "udp"
+  source_security_group_id = aws_security_group.swarm_manager.id
+  security_group_id        = aws_security_group.swarm_worker.id
+  description              = "Docker overlay network from manager"
 }
