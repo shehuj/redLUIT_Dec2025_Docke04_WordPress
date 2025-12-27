@@ -98,15 +98,6 @@ check_env_vars() {
 
     local missing=0
 
-    # Required for deployment
-    if [ -z "$SSH_PUBLIC_KEY" ]; then
-        print_warning "SSH_PUBLIC_KEY not set"
-        print_info "Set with: export SSH_PUBLIC_KEY=\$(cat ~/.ssh/id_rsa.pub)"
-        missing=1
-    else
-        print_success "SSH_PUBLIC_KEY is set"
-    fi
-
     # Required for application
     if [ -z "$MYSQL_ROOT_PASSWORD" ]; then
         print_warning "MYSQL_ROOT_PASSWORD not set"
@@ -134,14 +125,12 @@ check_env_vars() {
         cat << 'EOF'
 
 Export required variables:
-  export SSH_PUBLIC_KEY="$(cat ~/.ssh/id_rsa.pub)"
   export MYSQL_ROOT_PASSWORD="your_secure_password"
   export MYSQL_PASSWORD="your_app_password"
   export SLACK_WEBHOOK_URL="https://hooks.slack.com/..." # optional
 
 Or create .env file:
   cat > .env << 'ENVFILE'
-  export SSH_PUBLIC_KEY="$(cat ~/.ssh/id_rsa.pub)"
   export MYSQL_ROOT_PASSWORD="change_this_password"
   export MYSQL_PASSWORD="change_this_too"
   export SLACK_WEBHOOK_URL="https://hooks.slack.com/..."
@@ -185,7 +174,6 @@ deploy_infrastructure() {
         cat > terraform.tfvars << EOF
 aws_region = "${AWS_REGION}"
 project_name = "${PROJECT_NAME}"
-ssh_public_key = "${SSH_PUBLIC_KEY}"
 EOF
     fi
 
@@ -205,6 +193,12 @@ EOF
     MANAGER_IP=$(terraform output -raw swarm_manager_public_ip)
     echo "MANAGER_IP=$MANAGER_IP" > ../../.deploy_vars
 
+    # Save private key for SSH access
+    print_info "Saving SSH private key..."
+    terraform output -raw private_key_pem > ../../swarm-key.pem
+    chmod 600 ../../swarm-key.pem
+    print_success "SSH key saved to swarm-key.pem"
+
     cd ../..
 }
 
@@ -221,12 +215,13 @@ configure_swarm() {
 
     # Test connectivity
     print_info "Testing SSH connectivity..."
-    ansible all -m ping -i inventory/hosts.ini
+    ANSIBLE_HOST_KEY_CHECKING=False \
+    ansible all -m ping -i inventory/hosts.ini --private-key=../../swarm-key.pem
 
     # Run playbook
     print_info "Running Ansible playbook..."
     ANSIBLE_HOST_KEY_CHECKING=False \
-    ansible-playbook -i inventory/hosts.ini playbooks/site.yml -v
+    ansible-playbook -i inventory/hosts.ini playbooks/site.yml -v --private-key=../../swarm-key.pem
 
     print_success "Swarm cluster configured!"
 
@@ -240,12 +235,12 @@ deploy_stacks() {
 
     # Copy stack files to manager
     print_info "Copying stack files to manager..."
-    scp -o StrictHostKeyChecking=no -r stack-monitoring ubuntu@${MANAGER_IP}:~/
-    scp -o StrictHostKeyChecking=no -r stack-app ubuntu@${MANAGER_IP}:~/
+    scp -i swarm-key.pem -o StrictHostKeyChecking=no -r stack-monitoring ubuntu@${MANAGER_IP}:~/
+    scp -i swarm-key.pem -o StrictHostKeyChecking=no -r stack-app ubuntu@${MANAGER_IP}:~/
 
     # Deploy stacks
     print_info "Deploying stacks..."
-    ssh -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} << 'ENDSSH'
+    ssh -i swarm-key.pem -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} << 'ENDSSH'
     # Deploy monitoring first
     cd ~/stack-monitoring
     docker stack deploy -c monitoring-stack.yml monitoring
@@ -271,21 +266,23 @@ verify_deployment() {
     source .deploy_vars
 
     print_info "Swarm cluster status:"
-    ssh ubuntu@${MANAGER_IP} 'docker node ls'
+    ssh -i swarm-key.pem -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} 'docker node ls'
 
     echo ""
     print_info "Services:"
-    ssh ubuntu@${MANAGER_IP} 'docker service ls'
+    ssh -i swarm-key.pem -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} 'docker service ls'
 
     echo ""
     print_info "Secrets:"
-    ssh ubuntu@${MANAGER_IP} 'docker secret ls'
+    ssh -i swarm-key.pem -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} 'docker secret ls'
 
     echo ""
     print_success "Deployment complete!"
     print_info "WordPress: http://${MANAGER_IP}"
     print_info "Grafana: http://${MANAGER_IP}:3000"
     print_info "Prometheus: http://${MANAGER_IP}:9090"
+    echo ""
+    print_info "SSH access: ssh -i swarm-key.pem ubuntu@${MANAGER_IP}"
 }
 
 # Main execution
@@ -322,15 +319,23 @@ Access your deployment:
   Grafana:    http://${MANAGER_IP}:3000 (admin/admin)
   Prometheus: http://${MANAGER_IP}:9090
 
+SSH Access:
+  ssh -i swarm-key.pem ubuntu@${MANAGER_IP}
+
 Next steps:
   1. Complete WordPress setup in browser
   2. Configure Grafana dashboards
   3. Set up DNS/domain if needed
   4. Configure SSL certificate
 
+IMPORTANT:
+  - Keep swarm-key.pem secure (chmod 600)
+  - DO NOT commit swarm-key.pem to git
+  - Backup swarm-key.pem if needed
+
 To destroy:
-  cd infra/terraform
-  terraform destroy
+  ./destroy.sh
+  (or manually: cd infra/terraform && terraform destroy)
 
 For help:
   cat README.md

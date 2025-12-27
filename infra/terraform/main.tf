@@ -6,6 +6,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
   }
 
   # Backend configuration is in backend.tf
@@ -41,10 +45,16 @@ data "aws_ami" "ubuntu" {
   }
 }
 
-# SSH Key Pair for EC2 access
+# Generate SSH key pair using TLS provider
+resource "tls_private_key" "swarm_key" {
+  algorithm = "RSA"
+  rsa_bits  = 4096
+}
+
+# Create AWS key pair from generated public key
 resource "aws_key_pair" "swarm_key" {
   key_name   = "${var.project_name}-swarm-key"
-  public_key = var.ssh_public_key
+  public_key = tls_private_key.swarm_key.public_key_openssh
 
   tags = {
     Name = "${var.project_name}-swarm-key"

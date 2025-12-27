@@ -13,14 +13,15 @@ output "public_subnet_ids" {
   value       = aws_subnet.public[*].id
 }
 
-output "private_subnet_ids" {
-  description = "Private subnet IDs"
-  value       = aws_subnet.private[*].id
-}
-
 output "swarm_manager_public_ip" {
   description = "Public IP of Swarm manager node"
   value       = aws_instance.swarm_manager.public_ip
+}
+
+output "private_key_pem" {
+  description = "Private key in PEM format for SSH access"
+  value       = tls_private_key.swarm_key.private_key_pem
+  sensitive   = true
 }
 
 output "swarm_manager_private_ip" {
