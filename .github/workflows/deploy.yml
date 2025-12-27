@@ -1,10 +1,10 @@
 name: Swarm Deploy + Monitoring (Standalone)
 
 on:
-  # Removed automatic push trigger - use main-deployment.yml instead for merge to main
-  # This workflow is now only for manual deployments or testing
+  push:
+    branches:
+      - main
 
-  # Allow manual deployment with options
   workflow_dispatch:
     inputs:
       force_rebuild:

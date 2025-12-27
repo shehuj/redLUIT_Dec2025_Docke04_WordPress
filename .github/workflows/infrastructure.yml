@@ -3,7 +3,7 @@ name: Infrastructure Provisioning (Standalone)
 on:
   # Trigger on PR to dev branch for validation only
   pull_request:
-    branches: ["dev"]
+    branches: ["main", "dev"]
     paths:
       - 'infra/**'
       - '.github/workflows/infrastructure.yml'
