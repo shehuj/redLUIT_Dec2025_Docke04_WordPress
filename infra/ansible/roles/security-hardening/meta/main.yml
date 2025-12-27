@@ -1,0 +1,27 @@
+---
+# Role metadata for security-hardening
+
+galaxy_info:
+  role_name: security_hardening
+  author: DevOps Team
+  description: Security hardening for Docker Swarm cluster nodes
+  company: WordPress Swarm Project
+
+  license: MIT
+
+  min_ansible_version: "2.15"
+
+  platforms:
+    - name: Ubuntu
+      versions:
+        - jammy  # 22.04 LTS
+        - focal  # 20.04 LTS
+
+  galaxy_tags:
+    - security
+    - hardening
+    - firewall
+    - ufw
+    - fail2ban
+
+dependencies: []

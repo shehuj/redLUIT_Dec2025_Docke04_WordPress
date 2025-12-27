@@ -1,0 +1,26 @@
+---
+# Role metadata for docker-engine
+
+galaxy_info:
+  role_name: docker_engine
+  author: DevOps Team
+  description: Install and configure Docker Engine on Ubuntu
+  company: WordPress Swarm Project
+
+  license: MIT
+
+  min_ansible_version: "2.15"
+
+  platforms:
+    - name: Ubuntu
+      versions:
+        - jammy  # 22.04 LTS
+        - focal  # 20.04 LTS
+
+  galaxy_tags:
+    - docker
+    - container
+    - swarm
+    - orchestration
+
+dependencies: []

@@ -1,0 +1,23 @@
+---
+# Default variables for swarm-init role
+
+# Swarm initialization settings
+swarm_advertise_addr: "{{ ansible_default_ipv4.address }}"
+swarm_listen_addr: "0.0.0.0:2377"
+
+# Network settings
+swarm_default_addr_pool: []  # Use Docker defaults
+swarm_subnet_size: 24
+
+# Manager nodes
+swarm_manager_expected_count: 1
+
+# Worker nodes
+swarm_worker_expected_count: 2
+
+# Join token expiry (hours)
+swarm_join_token_expiry: 24
+
+# Retry settings for joining
+swarm_join_retries: 3
+swarm_join_delay: 10

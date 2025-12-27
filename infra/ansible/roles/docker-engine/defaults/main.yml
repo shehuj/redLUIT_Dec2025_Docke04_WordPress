@@ -1,0 +1,30 @@
+---
+# Default variables for docker-engine role
+
+# Docker version (using latest from official repository)
+docker_edition: "ce"
+
+# Docker packages to install
+docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin
+
+# Docker service configuration
+docker_service_enabled: true
+docker_service_state: started
+
+# Docker daemon configuration
+docker_daemon_options: {}
+
+# Users to add to docker group
+docker_users:
+  - ubuntu
+
+# Docker Python library for Ansible module support
+docker_python_package: docker
+
+# APT cache valid time (seconds)
+apt_cache_valid_time: 3600
