@@ -171,18 +171,19 @@ jobs:
         env:
           MANAGER_IP: ${{ needs.preflight.outputs.manager_ip }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          MON_STACK: ${{ env.MON_STACK }}
         run: |
-          ssh -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} bash << 'ENDSSH'
+          ssh -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} bash << ENDSSH
             echo "🚀 Deploying monitoring stack..."
 
             # Create slack webhook secret if provided
-            if [ -n "${{ secrets.SLACK_WEBHOOK_URL }}" ]; then
+            if [ -n "${SLACK_WEBHOOK_URL}" ]; then
               docker secret ls | grep -q slack_webhook_url || \
-                echo "${{ secrets.SLACK_WEBHOOK_URL }}" | docker secret create slack_webhook_url -
+                echo "${SLACK_WEBHOOK_URL}" | docker secret create slack_webhook_url -
             fi
 
             cd ~/stack-monitoring
-            docker stack deploy -c monitoring-stack.yml ${{ env.MON_STACK }}
+            docker stack deploy -c monitoring-stack.yml ${MON_STACK}
 
             echo "✅ Monitoring stack deployed"
 
@@ -190,34 +191,35 @@ jobs:
             sleep 10
 
             # Check service status
-            docker stack ps ${{ env.MON_STACK }} --no-trunc | head -20
+            docker stack ps ${MON_STACK} --no-trunc | head -20
           ENDSSH
 
       - name: Verify monitoring services
         env:
           MANAGER_IP: ${{ needs.preflight.outputs.manager_ip }}
+          MON_STACK: ${{ env.MON_STACK }}
         run: |
           echo "🔍 Verifying monitoring services..."
-          ssh -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} bash << 'ENDSSH'
+          ssh -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} bash << ENDSSH
             # Wait for services to be running
             for i in {1..12}; do
-              RUNNING=$(docker service ls --filter "name=${{ env.MON_STACK }}" --format "{{.Replicas}}" | grep -c "1/1" || true)
-              TOTAL=$(docker service ls --filter "name=${{ env.MON_STACK }}" | wc -l)
-              TOTAL=$((TOTAL - 1))  # Subtract header line
+              RUNNING=\$(docker service ls --filter "name=${MON_STACK}" --format "{{.Replicas}}" | grep -c "1/1" || true)
+              TOTAL=\$(docker service ls --filter "name=${MON_STACK}" | wc -l)
+              TOTAL=\$((TOTAL - 1))  # Subtract header line
 
-              echo "Services running: $RUNNING/$TOTAL"
+              echo "Services running: \$RUNNING/\$TOTAL"
 
-              if [ "$RUNNING" -eq "$TOTAL" ] && [ "$TOTAL" -gt 0 ]; then
+              if [ "\$RUNNING" -eq "\$TOTAL" ] && [ "\$TOTAL" -gt 0 ]; then
                 echo "✅ All monitoring services are running"
                 exit 0
               fi
 
-              echo "Waiting for services to start... (attempt $i/12)"
+              echo "Waiting for services to start... (attempt \$i/12)"
               sleep 10
             done
 
             echo "⚠️ Some services may still be starting"
-            docker service ls --filter "name=${{ env.MON_STACK }}"
+            docker service ls --filter "name=${MON_STACK}"
           ENDSSH
 
   # Deploy application stack
@@ -262,19 +264,20 @@ jobs:
           MANAGER_IP: ${{ needs.preflight.outputs.manager_ip }}
           MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
           MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+          SWARM_STACK: ${{ env.SWARM_STACK }}
         run: |
-          ssh -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} bash << 'ENDSSH'
+          ssh -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} bash << ENDSSH
             echo "🚀 Deploying WordPress application..."
 
             # Create database secrets
             docker secret ls | grep -q mysql_root_password || \
-              echo "${{ secrets.MYSQL_ROOT_PASSWORD }}" | docker secret create mysql_root_password -
+              echo "${MYSQL_ROOT_PASSWORD}" | docker secret create mysql_root_password -
 
             docker secret ls | grep -q mysql_password || \
-              echo "${{ secrets.MYSQL_PASSWORD }}" | docker secret create mysql_password -
+              echo "${MYSQL_PASSWORD}" | docker secret create mysql_password -
 
             cd ~/stack-app
-            docker stack deploy -c docker-stack.yml ${{ env.SWARM_STACK }}
+            docker stack deploy -c docker-stack.yml ${SWARM_STACK}
 
             echo "✅ Application stack deployed"
 
@@ -282,40 +285,41 @@ jobs:
             sleep 15
 
             # Check service status
-            docker stack ps ${{ env.SWARM_STACK }} --no-trunc | head -20
+            docker stack ps ${SWARM_STACK} --no-trunc | head -20
           ENDSSH
 
       - name: Verify application services
         env:
           MANAGER_IP: ${{ needs.preflight.outputs.manager_ip }}
+          SWARM_STACK: ${{ env.SWARM_STACK }}
         run: |
           echo "🔍 Verifying application services..."
-          ssh -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} bash << 'ENDSSH'
+          ssh -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} bash << ENDSSH
             # Wait for services to be running
             for i in {1..18}; do
-              RUNNING=$(docker service ls --filter "name=${{ env.SWARM_STACK }}" --format "{{.Replicas}}" | grep -c "/" || true)
-              TOTAL=$(docker service ls --filter "name=${{ env.SWARM_STACK }}" | wc -l)
-              TOTAL=$((TOTAL - 1))  # Subtract header line
+              RUNNING=\$(docker service ls --filter "name=${SWARM_STACK}" --format "{{.Replicas}}" | grep -c "/" || true)
+              TOTAL=\$(docker service ls --filter "name=${SWARM_STACK}" | wc -l)
+              TOTAL=\$((TOTAL - 1))  # Subtract header line
 
-              echo "Services: $RUNNING/$TOTAL"
+              echo "Services: \$RUNNING/\$TOTAL"
 
-              if [ "$TOTAL" -gt 0 ]; then
+              if [ "\$TOTAL" -gt 0 ]; then
                 # Check if MySQL is ready
-                MYSQL_READY=$(docker service ps ${{ env.SWARM_STACK }}_mysql --format "{{.CurrentState}}" | grep -c "Running" || true)
+                MYSQL_READY=\$(docker service ps ${SWARM_STACK}_mysql --format "{{.CurrentState}}" | grep -c "Running" || true)
 
-                if [ "$MYSQL_READY" -gt 0 ]; then
+                if [ "\$MYSQL_READY" -gt 0 ]; then
                   echo "✅ Application services are starting/running"
-                  docker service ls --filter "name=${{ env.SWARM_STACK }}"
+                  docker service ls --filter "name=${SWARM_STACK}"
                   exit 0
                 fi
               fi
 
-              echo "Waiting for services to start... (attempt $i/18)"
+              echo "Waiting for services to start... (attempt \$i/18)"
               sleep 10
             done
 
             echo "⚠️ Services may still be starting"
-            docker service ls --filter "name=${{ env.SWARM_STACK }}"
+            docker service ls --filter "name=${SWARM_STACK}"
           ENDSSH
 
       - name: Get WordPress URL

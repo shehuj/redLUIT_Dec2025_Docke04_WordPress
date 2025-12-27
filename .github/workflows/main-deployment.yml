@@ -385,27 +385,27 @@ jobs:
           MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
-          ssh -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} bash << 'ENDSSH'
+          ssh -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} bash << ENDSSH
             echo "🚀 Deploying stacks (idempotent)..."
 
             # Idempotent secret creation
             docker secret ls | grep -q mysql_root_password || \
-              echo "${{ secrets.MYSQL_ROOT_PASSWORD }}" | docker secret create mysql_root_password -
+              echo "${MYSQL_ROOT_PASSWORD}" | docker secret create mysql_root_password -
 
             docker secret ls | grep -q mysql_password || \
-              echo "${{ secrets.MYSQL_PASSWORD }}" | docker secret create mysql_password -
+              echo "${MYSQL_PASSWORD}" | docker secret create mysql_password -
 
             docker secret ls | grep -q slack_webhook_url || \
-              echo "${{ secrets.SLACK_WEBHOOK_URL }}" | docker secret create slack_webhook_url -
+              echo "${SLACK_WEBHOOK_URL}" | docker secret create slack_webhook_url -
 
             # Deploy monitoring stack first (creates mon_net network)
             cd ~/stack-monitoring
-            docker stack deploy -c monitoring-stack.yml ${{ env.MON_STACK }}
+            docker stack deploy -c monitoring-stack.yml ${MON_STACK}
             echo "✅ Monitoring stack deployed"
 
             # Deploy application stack (uses mon_net network)
             cd ~/stack-app
-            docker stack deploy -c docker-stack.yml ${{ env.SWARM_STACK }}
+            docker stack deploy -c docker-stack.yml ${SWARM_STACK}
             echo "✅ Application stack deployed"
 
             # Wait for services to stabilize
@@ -413,8 +413,8 @@ jobs:
 
             # Show deployment status
             echo "📊 Deployment Status:"
-            docker stack ps ${{ env.SWARM_STACK }} --no-trunc
-            docker stack ps ${{ env.MON_STACK }} --no-trunc
+            docker stack ps ${SWARM_STACK} --no-trunc
+            docker stack ps ${MON_STACK} --no-trunc
           ENDSSH
 
       - name: Verify deployment
