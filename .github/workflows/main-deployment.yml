@@ -384,13 +384,15 @@ jobs:
       - name: Deploy to Swarm (Idempotent)
         env:
           MANAGER_IP: ${{ needs.provision-infrastructure.outputs.manager_ip }}
-          MON_STACK: ${{ env.MON_STACK }}
-          SWARM_STACK: ${{ env.SWARM_STACK }}
           MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
           MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
-          ssh -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} bash << ENDSSH
+          # Export variables for heredoc expansion
+          export MON_STACK="${{ env.MON_STACK }}"
+          export SWARM_STACK="${{ env.SWARM_STACK }}"
+
+          ssh -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} "bash -s" << ENDSSH
             echo "🚀 Deploying stacks (idempotent)..."
 
             # Idempotent secret creation
