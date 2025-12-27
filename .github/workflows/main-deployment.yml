@@ -1,0 +1,415 @@
+name: Main Deployment Pipeline
+
+on:
+  # Trigger on merge to main
+  push:
+    branches: ["main"]
+
+  # Allow manual trigger with options
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: 'Skip validation tests (not recommended)'
+        required: false
+        type: boolean
+        default: false
+      skip_infra:
+        description: 'Skip infrastructure provisioning'
+        required: false
+        type: boolean
+        default: false
+      infra_action:
+        description: 'Infrastructure action (for manual runs)'
+        required: false
+        type: choice
+        default: 'apply'
+        options:
+          - plan
+          - apply
+          - skip
+
+permissions:
+  contents: read
+
+env:
+  TF_VERSION: '1.6.0'
+  ANSIBLE_VERSION: '8.0.0'
+  PYTHON_VERSION: '3.12'
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  SWARM_STACK: levelop-wp
+  MON_STACK: monitoring
+
+jobs:
+  # Stage 1: Run all validations and tests
+  validations:
+    name: Run All Validations
+    runs-on: ubuntu-latest
+    if: ${{ !inputs.skip_tests }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8 pytest pytest-cov
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Run Python tests
+        run: |
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+          pytest tests/ -v
+
+      - name: Run compliance checks
+        run: |
+          python3 tests/check_required_files.py
+          pytest tests/test_infrastructure.py -v
+          pytest tests/test_repo.py -v
+
+      - name: Validate Docker stacks
+        run: |
+          docker compose -f stack-app/docker-stack.yml config > /dev/null
+          docker compose -f stack-monitoring/monitoring-stack.yml config > /dev/null
+
+      - name: Validation summary
+        run: |
+          echo "✅ All validations passed successfully!"
+
+  # Stage 2: Validate and provision infrastructure
+  terraform-validate:
+    name: Terraform Validation
+    needs: validations
+    if: |
+      always() &&
+      (needs.validations.result == 'success' || needs.validations.result == 'skipped') &&
+      !inputs.skip_infra
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+
+      - name: Terraform Init
+        run: terraform init -backend=false
+
+      - name: Terraform Validate
+        run: terraform validate
+
+  ansible-validate:
+    name: Ansible Validation
+    needs: validations
+    if: |
+      always() &&
+      (needs.validations.result == 'success' || needs.validations.result == 'skipped') &&
+      !inputs.skip_infra
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Ansible
+        run: |
+          python -m pip install --upgrade pip
+          pip install "ansible>=${{ env.ANSIBLE_VERSION }}" ansible-lint yamllint
+
+      - name: Ansible Syntax Check
+        working-directory: infra/ansible
+        run: |
+          ansible-playbook playbooks/site.yml --syntax-check
+          ansible-playbook playbooks/swarm-setup.yml --syntax-check
+
+  provision-infrastructure:
+    name: Provision Infrastructure
+    needs: [terraform-validate, ansible-validate]
+    if: |
+      always() &&
+      needs.terraform-validate.result == 'success' &&
+      needs.ansible-validate.result == 'success' &&
+      !inputs.skip_infra &&
+      (inputs.infra_action != 'skip' || github.event_name == 'push')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform
+
+    outputs:
+      manager_ip: ${{ steps.terraform_outputs.outputs.manager_ip }}
+      worker_ips: ${{ steps.terraform_outputs.outputs.worker_ips }}
+      infra_changed: ${{ steps.check_changes.outputs.changed }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Plan
+        id: plan
+        env:
+          TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
+        run: |
+          terraform plan -input=false -out=tfplan -detailed-exitcode || export TF_EXIT=$?
+          if [ ${TF_EXIT:-0} -eq 2 ]; then
+            echo "changes_detected=true" >> $GITHUB_OUTPUT
+          else
+            echo "changes_detected=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check if infrastructure changes needed
+        id: check_changes
+        run: |
+          if [ "${{ steps.plan.outputs.changes_detected }}" == "true" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "📝 Infrastructure changes detected"
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "✅ Infrastructure is up to date (idempotent)"
+          fi
+
+      - name: Terraform Apply (Idempotent)
+        if: steps.plan.outputs.changes_detected == 'true' || inputs.infra_action == 'apply'
+        env:
+          TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
+        run: |
+          echo "🚀 Applying infrastructure changes..."
+          terraform apply -auto-approve tfplan
+
+      - name: Get Terraform Outputs
+        id: terraform_outputs
+        run: |
+          echo "manager_ip=$(terraform output -raw swarm_manager_public_ip || echo '')" >> $GITHUB_OUTPUT
+          echo "worker_ips=$(terraform output -json swarm_worker_public_ips | jq -r '. | join(",")' || echo '')" >> $GITHUB_OUTPUT
+
+      - name: Generate Ansible Inventory
+        if: steps.plan.outputs.changes_detected == 'true' || inputs.infra_action == 'apply'
+        run: |
+          terraform output -raw ansible_inventory > ../../infra/ansible/inventory/hosts.ini
+
+      - name: Upload Ansible Inventory
+        if: steps.plan.outputs.changes_detected == 'true' || inputs.infra_action == 'apply'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ansible-inventory
+          path: infra/ansible/inventory/hosts.ini
+          retention-days: 1
+
+  configure-swarm:
+    name: Configure Swarm Cluster
+    needs: provision-infrastructure
+    if: |
+      always() &&
+      needs.provision-infrastructure.result == 'success' &&
+      needs.provision-infrastructure.outputs.infra_changed == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Ansible Inventory
+        uses: actions/download-artifact@v4
+        with:
+          name: ansible-inventory
+          path: infra/ansible/inventory/
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Ansible
+        run: |
+          python -m pip install --upgrade pip
+          pip install "ansible>=${{ env.ANSIBLE_VERSION }}"
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ needs.provision-infrastructure.outputs.manager_ip }} >> ~/.ssh/known_hosts
+
+      - name: Wait for instances to be ready
+        run: |
+          echo "⏳ Waiting for instances to fully boot..."
+          sleep 60
+
+      - name: Run Ansible playbook (Idempotent)
+        working-directory: infra/ansible
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          ANSIBLE_HOST_KEY_CHECKING: False
+        run: |
+          echo "🔧 Configuring Swarm cluster (idempotent)..."
+          ansible-playbook -i inventory/hosts.ini playbooks/site.yml -v
+
+      - name: Verify Swarm cluster
+        env:
+          MANAGER_IP: ${{ needs.provision-infrastructure.outputs.manager_ip }}
+        run: |
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} 'docker node ls'
+          echo "✅ Swarm cluster configured successfully"
+
+  # Stage 3: Deploy application stacks
+  deploy-stacks:
+    name: Deploy Application Stacks
+    needs: [provision-infrastructure, configure-swarm]
+    if: |
+      always() &&
+      (needs.provision-infrastructure.result == 'success' || needs.provision-infrastructure.result == 'skipped') &&
+      (needs.configure-swarm.result == 'success' || needs.configure-swarm.result == 'skipped')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker images
+        run: |
+          echo "🐳 Preparing Docker images..."
+          docker pull mysql:8.0
+          docker tag mysql:8.0 ${{ secrets.DOCKERHUB_USERNAME }}/mysql:8.0-prod
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/mysql:8.0-prod
+
+          docker pull wordpress:latest
+          docker tag wordpress:latest ${{ secrets.DOCKERHUB_USERNAME }}/wordpress:latest-prod
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/wordpress:latest-prod
+
+      - name: Deploy to Swarm (Idempotent)
+        uses: appleboy/ssh-action@v0.1.7
+        env:
+          MON_STACK: ${{ env.MON_STACK }}
+          SWARM_STACK: ${{ env.SWARM_STACK }}
+        with:
+          host: ${{ secrets.SWARM_MANAGER_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: MON_STACK,SWARM_STACK
+          script: |
+            echo "🚀 Deploying stacks (idempotent)..."
+
+            # Idempotent secret creation
+            docker secret ls | grep -q mysql_root_password || \
+              echo "${{ secrets.MYSQL_ROOT_PASSWORD }}" | docker secret create mysql_root_password -
+
+            docker secret ls | grep -q mysql_password || \
+              echo "${{ secrets.MYSQL_PASSWORD }}" | docker secret create mysql_password -
+
+            docker secret ls | grep -q slack_webhook_url || \
+              echo "${{ secrets.SLACK_WEBHOOK_URL }}" | docker secret create slack_webhook_url -
+
+            # Deploy monitoring stack first (creates mon_net network)
+            cd stack-monitoring
+            docker stack deploy -c monitoring-stack.yml $MON_STACK
+            echo "✅ Monitoring stack deployed"
+            cd ..
+
+            # Deploy application stack (uses mon_net network)
+            docker stack deploy --with-registry-auth \
+              -c stack-app/docker-stack.yml $SWARM_STACK
+            echo "✅ Application stack deployed"
+
+            # Wait for services to stabilize
+            sleep 10
+
+            # Show deployment status
+            echo "📊 Deployment Status:"
+            docker stack ps $SWARM_STACK --no-trunc
+            docker stack ps $MON_STACK --no-trunc
+
+      - name: Verify deployment
+        uses: appleboy/ssh-action@v0.1.7
+        with:
+          host: ${{ secrets.SWARM_MANAGER_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            echo "🔍 Verifying deployment..."
+            docker service ls
+            echo ""
+            echo "✅ Deployment verification complete"
+
+  # Final summary
+  deployment-summary:
+    name: Deployment Summary
+    needs: [validations, provision-infrastructure, configure-swarm, deploy-stacks]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Generate deployment summary
+        run: |
+          echo "# Deployment Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Stage Results" >> $GITHUB_STEP_SUMMARY
+          echo "- Validations: ${{ needs.validations.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Infrastructure: ${{ needs.provision-infrastructure.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Swarm Configuration: ${{ needs.configure-swarm.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Stack Deployment: ${{ needs.deploy-stacks.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.deploy-stacks.result }}" == "success" ]; then
+            echo "## ✅ Deployment Successful!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Manager IP: ${{ needs.provision-infrastructure.outputs.manager_ip }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ❌ Deployment Failed" >> $GITHUB_STEP_SUMMARY
+            echo "Check the logs above for details" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Check overall status
+        run: |
+          if [ "${{ needs.deploy-stacks.result }}" != "success" ]; then
+            echo "❌ Deployment pipeline failed"
+            exit 1
+          fi
+          echo "✅ All deployment stages completed successfully!"

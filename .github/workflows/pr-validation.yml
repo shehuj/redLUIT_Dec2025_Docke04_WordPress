@@ -1,0 +1,208 @@
+name: PR Validation
+
+on:
+  # Run all validations on PRs to dev branch
+  pull_request:
+    branches: ["dev"]
+
+  # Allow manual trigger for testing
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  TF_VERSION: '1.6.0'
+  ANSIBLE_VERSION: '8.0.0'
+  PYTHON_VERSION: '3.12'
+
+jobs:
+  # Job 1: Python linting and testing
+  python-tests:
+    name: Python Tests & Linting
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8 pytest pytest-cov
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Lint with flake8
+        run: |
+          # Stop the build if there are Python syntax errors or undefined names
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+          # Treat all errors as warnings
+          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+      - name: Run pytest with coverage
+        run: |
+          pytest tests/ -v --cov=. --cov-report=term-missing
+
+  # Job 2: Compliance checks
+  compliance-checks:
+    name: Compliance Checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run compliance checks
+        run: |
+          python3 tests/check_required_files.py
+
+      - name: Run infrastructure compliance tests
+        run: |
+          pytest tests/test_infrastructure.py -v
+
+      - name: Run repository structure tests
+        run: |
+          pytest tests/test_repo.py -v
+
+  # Job 3: Terraform validation
+  terraform-validation:
+    name: Terraform Validation
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+
+      - name: Terraform Init
+        run: terraform init -backend=false
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan (Dry Run)
+        if: github.event_name == 'pull_request'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
+        run: |
+          terraform init
+          terraform plan -input=false -no-color
+        continue-on-error: true
+
+  # Job 4: Ansible validation
+  ansible-validation:
+    name: Ansible Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-ansible-${{ env.ANSIBLE_VERSION }}
+          restore-keys: |
+            ${{ runner.os }}-ansible-
+
+      - name: Install Ansible and linting tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install "ansible>=${{ env.ANSIBLE_VERSION }}" ansible-lint yamllint
+
+      - name: Ansible Syntax Check
+        working-directory: infra/ansible
+        run: |
+          ansible-playbook playbooks/site.yml --syntax-check
+          ansible-playbook playbooks/swarm-setup.yml --syntax-check
+
+      - name: Ansible Lint
+        working-directory: infra/ansible
+        run: ansible-lint playbooks/ roles/
+        continue-on-error: true
+
+      - name: YAML Lint
+        working-directory: infra/ansible
+        run: yamllint playbooks/ roles/ inventory/group_vars/
+        continue-on-error: true
+
+  # Job 5: Docker stack validation
+  docker-stack-validation:
+    name: Docker Stack Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate Docker Compose files
+        run: |
+          docker compose -f stack-app/docker-stack.yml config > /dev/null
+          docker compose -f stack-monitoring/monitoring-stack.yml config > /dev/null
+
+      - name: Check for Docker Compose syntax errors
+        run: |
+          echo "✅ All Docker stack files are valid"
+
+  # Summary job - requires all validations to pass
+  validation-summary:
+    name: Validation Summary
+    needs: [python-tests, compliance-checks, terraform-validation, ansible-validation, docker-stack-validation]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Check all validations passed
+        run: |
+          if [ "${{ needs.python-tests.result }}" != "success" ] || \
+             [ "${{ needs.compliance-checks.result }}" != "success" ] || \
+             [ "${{ needs.terraform-validation.result }}" != "success" ] || \
+             [ "${{ needs.ansible-validation.result }}" != "success" ] || \
+             [ "${{ needs.docker-stack-validation.result }}" != "success" ]; then
+            echo "❌ Some validations failed"
+            exit 1
+          fi
+          echo "✅ All validations passed successfully!"

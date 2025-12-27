@@ -1,9 +1,18 @@
-name: Compliance Checks
+name: Compliance Checks (Legacy)
+
+# NOTE: This workflow is now part of pr-validation.yml
+# Keeping for backwards compatibility, but pr-validation.yml is preferred
 
 on:
   # Run compliance checks on PRs to dev branch
   pull_request:
     branches: [ "dev" ]
+    paths:
+      - 'tests/**'
+      - 'requirements.txt'
+
+  # Allow manual trigger
+  workflow_dispatch:
 jobs:
   compliance-checks:
     runs-on: ubuntu-latest
