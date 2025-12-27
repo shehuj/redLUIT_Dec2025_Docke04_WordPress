@@ -1,7 +1,6 @@
 name: Infrastructure Cleanup
 
 on:
-  # Manual trigger only - for safety
   workflow_dispatch:
     inputs:
       confirmation:
@@ -22,13 +21,13 @@ env:
   AWS_REGION: us-east-1
 
 jobs:
-  # Job 1: Verify confirmation and show destroy plan
   verify-and-plan:
     name: Verify Confirmation and Plan Destroy
     runs-on: ubuntu-latest
 
     outputs:
       confirmed: ${{ steps.check_confirmation.outputs.confirmed }}
+      action: ${{ github.event.inputs.terraform_action }}
 
     steps:
       - name: Checkout code
@@ -59,18 +58,12 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Setup Terraform Backend (Idempotent)
-        working-directory: infra/terraform
-        run: |
-          echo "🚀 Setting up Terraform backend infrastructure..."
-          chmod +x setup-backend.sh
-          ./setup-backend.sh || echo "⚠️  Backend setup had warnings (may already exist)"
-
       - name: Terraform Init
         working-directory: infra/terraform
         run: terraform init -reconfigure
 
       - name: Terraform Plan Destroy
+        if: ${{ github.event.inputs.terraform_action == 'plan-destroy' }}
         working-directory: infra/terraform
         env:
           TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
@@ -86,21 +79,20 @@ jobs:
           terraform show destroy.tfplan
 
       - name: Upload destroy plan
+        if: ${{ github.event.inputs.terraform_action == 'plan-destroy' }}
         uses: actions/upload-artifact@v4
         with:
           name: destroy-plan
           path: infra/terraform/destroy.tfplan
           retention-days: 1
 
-  # Job 2: Execute infrastructure destruction
   destroy-infrastructure:
     name: Destroy AWS Infrastructure
     needs: verify-and-plan
     runs-on: ubuntu-latest
-    # Only run if confirmation succeeded AND user selected 'destroy' action
     if: |
       needs.verify-and-plan.outputs.confirmed == 'true' &&
-      github.event.inputs.terraform_action == 'destroy'
+      needs.verify-and-plan.outputs.action == 'destroy'
 
     steps:
       - name: Checkout code
@@ -119,16 +111,6 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Setup Terraform Backend
-        working-directory: infra/terraform
-        run: |
-          chmod +x setup-backend.sh
-          ./setup-backend.sh || echo "⚠️  Backend already exists"
-
-      - name: Terraform Init
-        working-directory: infra/terraform
-        run: terraform init -reconfigure
-
       - name: Download destroy plan
         uses: actions/download-artifact@v4
         with:
@@ -139,49 +121,15 @@ jobs:
         working-directory: infra/terraform
         run: |
           echo "⚠️⚠️⚠️ FINAL WARNING ⚠️⚠️⚠️"
-          echo ""
-          echo "You are about to DESTROY all infrastructure resources:"
-          echo "  - VPC and all networking (subnets, IGW, NAT gateway)"
-          echo "  - All EC2 instances (manager + workers)"
-          echo "  - All security groups"
-          echo "  - SSH key pairs"
-          echo "  - All data on instances will be PERMANENTLY LOST"
-          echo ""
-          echo "This action CANNOT be undone!"
-          echo ""
-          echo "Proceeding with destroy in 10 seconds..."
+          echo "Destroying AWS infrastructure in 10 seconds..."
           sleep 10
 
-      - name: Terraform Destroy
+      - name: Terraform Apply Destroy
         working-directory: infra/terraform
         env:
           TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
-        run: |
-          echo "🔥 Starting infrastructure destruction..."
-          terraform apply -auto-approve destroy.tfplan
-          echo "✅ Infrastructure destroyed successfully"
-
-      - name: Verify destruction
-        working-directory: infra/terraform
-        run: |
-          echo "Verifying all resources have been destroyed..."
-          terraform show
+        run: terraform apply -auto-approve destroy.tfplan
 
       - name: Summary
         run: |
-          echo "=========================================="
-          echo "✅ Infrastructure cleanup complete!"
-          echo "=========================================="
-          echo ""
-          echo "All AWS resources have been destroyed:"
-          echo "  ✓ EC2 instances terminated"
-          echo "  ✓ VPC and networking removed"
-          echo "  ✓ Security groups deleted"
-          echo "  ✓ SSH key pairs removed"
-          echo ""
-          echo "Next steps:"
-          echo "  1. Verify in AWS Console that all resources are gone"
-          echo "  2. Check for any orphaned resources (EBS snapshots, etc.)"
-          echo "  3. Remove SWARM_MANAGER_HOST from GitHub secrets if set"
-          echo "  4. Local Terraform state may need manual cleanup"
-          echo ""
+          echo "✅ Infrastructure destroyed successfully"
