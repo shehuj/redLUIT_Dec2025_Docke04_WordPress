@@ -7,7 +7,6 @@ on:
     paths:
       - 'infra/**'
       - '.github/workflows/infrastructure.yml'
-
   # Manual trigger for ad-hoc infrastructure operations
   workflow_dispatch:
     inputs:
@@ -34,6 +33,11 @@ env:
   TF_VERSION: '1.6.0'
   ANSIBLE_VERSION: '8.0.0'  # Ansible 8.x includes ansible-core 2.15
   AWS_REGION: ${{ secrets.AWS_REGION }}
+  ANSIBLE_FORCE_COLOR: 'true'
+  PYTHON_VERSION: '3.14'
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
 
 jobs:
   # Job 1: Validate Terraform configuration

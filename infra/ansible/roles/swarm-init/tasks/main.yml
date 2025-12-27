@@ -2,7 +2,7 @@
 # Docker Swarm initialization
 
 - name: Check if Swarm is already initialized
-  command: docker info --format '{{.Swarm.LocalNodeState}}'
+  shell: docker info --format '{{"{{"}}.Swarm.LocalNodeState{{"}}"}}'
   register: swarm_status
   changed_when: false
   failed_when: false

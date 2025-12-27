@@ -3,26 +3,26 @@
 
 - name: Configure all Swarm nodes - Install Docker and harden security
   hosts: swarm
-  become: yes
+  become: true
   roles:
     - docker-engine
     - security-hardening
 
 - name: Initialize Docker Swarm cluster
   hosts: swarm
-  become: yes
+  become: true
   roles:
     - swarm-init
 
 - name: Create Docker secrets on manager
   hosts: swarm_managers
-  become: yes
+  become: true
   roles:
     - swarm-secrets
 
 - name: Verify Swarm cluster health
   hosts: swarm_managers
-  become: yes
+  become: true
   tasks:
     - name: Check Swarm nodes
       command: docker node ls

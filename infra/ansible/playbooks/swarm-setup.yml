@@ -3,12 +3,12 @@
 
 - name: Initialize Docker Swarm cluster
   hosts: swarm
-  become: yes
+  become: true
   roles:
     - swarm-init
 
 - name: Create Docker secrets
   hosts: swarm_managers
-  become: yes
+  become: true
   roles:
     - swarm-secrets
