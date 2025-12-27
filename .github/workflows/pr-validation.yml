@@ -3,10 +3,27 @@ name: PR Validation
 on:
   # Run all validations on PRs to dev branch
   pull_request:
-    branches: ["dev"]
+    branches: ["main", "dev"]
 
   # Allow manual trigger for testing
   workflow_dispatch:
+    inputs:
+      run-python-tests:
+        description: 'Run Python tests and linting'
+        required: true
+        type: boolean
+      run-terraform-validation:
+        description: 'Run Terraform validation'
+        required: true
+        type: boolean
+      run-ansible-validation:
+        description: 'Run Ansible validation'
+        required: true
+        type: boolean
+      run-docker-stack-validation:
+        description: 'Run Docker stack validation'
+        required: true
+        type: boolean
 
 permissions:
   contents: read

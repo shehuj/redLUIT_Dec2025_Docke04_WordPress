@@ -46,8 +46,8 @@ cd infra/terraform
 ```
 
 **What it creates:**
-- S3 bucket: `wordpress-swarm-terraform-state`
-- DynamoDB table: `wordpress-swarm-terraform-locks`
+- S3 bucket: `ec2-shutdown-lambda-bucket`
+- DynamoDB table: `dyning_table`
 - Bucket versioning, encryption, and lifecycle policies
 
 **Idempotency:** Safe to run multiple times - it checks if resources exist first.

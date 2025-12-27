@@ -26,14 +26,14 @@ jobs:
   verify-and-plan:
     name: Verify Confirmation and Plan Destroy
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: infra/terraform
 
     outputs:
       confirmed: ${{ steps.check_confirmation.outputs.confirmed }}
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Check confirmation
         id: check_confirmation
         run: |
@@ -45,9 +45,6 @@ jobs:
             echo "✅ Confirmation received"
             echo "confirmed=true" >> $GITHUB_OUTPUT
           fi
-
-      - name: Checkout code
-        uses: actions/checkout@v4
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -62,10 +59,19 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Setup Terraform Backend (Idempotent)
+        working-directory: infra/terraform
+        run: |
+          echo "🚀 Setting up Terraform backend infrastructure..."
+          chmod +x setup-backend.sh
+          ./setup-backend.sh || echo "⚠️  Backend setup had warnings (may already exist)"
+
       - name: Terraform Init
-        run: terraform init
+        working-directory: infra/terraform
+        run: terraform init -reconfigure
 
       - name: Terraform Plan Destroy
+        working-directory: infra/terraform
         env:
           TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
         run: |
@@ -95,9 +101,6 @@ jobs:
     if: |
       needs.verify-and-plan.outputs.confirmed == 'true' &&
       github.event.inputs.terraform_action == 'destroy'
-    defaults:
-      run:
-        working-directory: infra/terraform
 
     steps:
       - name: Checkout code
@@ -116,8 +119,15 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Setup Terraform Backend
+        working-directory: infra/terraform
+        run: |
+          chmod +x setup-backend.sh
+          ./setup-backend.sh || echo "⚠️  Backend already exists"
+
       - name: Terraform Init
-        run: terraform init
+        working-directory: infra/terraform
+        run: terraform init -reconfigure
 
       - name: Download destroy plan
         uses: actions/download-artifact@v4
@@ -126,6 +136,7 @@ jobs:
           path: infra/terraform/
 
       - name: Final warning before destroy
+        working-directory: infra/terraform
         run: |
           echo "⚠️⚠️⚠️ FINAL WARNING ⚠️⚠️⚠️"
           echo ""
@@ -142,6 +153,7 @@ jobs:
           sleep 10
 
       - name: Terraform Destroy
+        working-directory: infra/terraform
         env:
           TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
         run: |
@@ -150,6 +162,7 @@ jobs:
           echo "✅ Infrastructure destroyed successfully"
 
       - name: Verify destruction
+        working-directory: infra/terraform
         run: |
           echo "Verifying all resources have been destroyed..."
           terraform show

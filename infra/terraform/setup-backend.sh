@@ -5,9 +5,9 @@
 set -e
 
 # Configuration
-BUCKET_NAME="wordpress-swarm-terraform-state"
-DYNAMODB_TABLE="wordpress-swarm-terraform-locks"
-AWS_REGION="${AWS_REGION:-us-east-1}"
+BUCKET_NAME="ec2-shutdown-lambda-bucket"
+DYNAMODB_TABLE="dyning_table"
+AWS_REGION="us-east-1"
 
 echo "🚀 Setting up Terraform backend infrastructure..."
 echo ""
