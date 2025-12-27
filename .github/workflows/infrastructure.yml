@@ -265,9 +265,29 @@ jobs:
       - name: Setup SSH key
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" | tr -d '\r' > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H ${{ needs.provision-infrastructure.outputs.manager_ip }} >> ~/.ssh/known_hosts
+          # Add all hosts to known_hosts
+          MANAGER_IP="${{ needs.provision-infrastructure.outputs.manager_ip }}"
+          WORKER_IPS="${{ needs.provision-infrastructure.outputs.worker_ips }}"
+
+          if [ -n "$MANAGER_IP" ]; then
+            ssh-keyscan -H "$MANAGER_IP" >> ~/.ssh/known_hosts 2>/dev/null || true
+          fi
+
+          # Add worker IPs (comma-separated)
+          if [ -n "$WORKER_IPS" ]; then
+            IFS=',' read -ra IPS <<< "$WORKER_IPS"
+            for ip in "${IPS[@]}"; do
+              ssh-keyscan -H "$ip" >> ~/.ssh/known_hosts 2>/dev/null || true
+            done
+          fi
+
+          # Verify key format
+          ssh-keygen -l -f ~/.ssh/id_rsa || {
+            echo "❌ SSH key format is invalid"
+            exit 1
+          }
 
       - name: Wait for instances to be ready
         run: |
