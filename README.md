@@ -1,499 +1,449 @@
-# Production WordPress with MySQL and Comprehensive Monitoring
+# WordPress on Docker Swarm with Complete Monitoring
 
-A production-ready Docker Swarm deployment featuring WordPress and MySQL with integrated Prometheus, Grafana, and AlertManager monitoring stack. Includes automated CI/CD deployment via GitHub Actions.
+**Production-ready, fully automated deployment of WordPress with MySQL and comprehensive monitoring stack on AWS using Docker Swarm.**
 
-## Architecture Overview
+[![Infrastructure](https://img.shields.io/badge/Infrastructure-Terraform-623CE4)](infra/terraform)
+[![Configuration](https://img.shields.io/badge/Configuration-Ansible-EE0000)](infra/ansible)
+[![CI/CD](https://img.shields.io/badge/CI/CD-GitHub_Actions-2088FF)](.github/workflows)
+[![Platform](https://img.shields.io/badge/Platform-Docker_Swarm-2496ED)](https://docs.docker.com/engine/swarm/)
 
-### Application Stack (stack-app/)
-- **MySQL 8.0** - Database with health checks and persistent storage
-  - 1 replica with automatic restart on failure
-  - Secrets-based credential management
-  - Health checks every 10s
-  - Connected to backend and monitoring networks
+## ✨ Features
 
-- **WordPress** - Web application with high availability
-  - 3 replicas for load distribution
-  - Health checks every 15s
-  - External access on port 80
-  - Connected to frontend, backend, and monitoring networks
+- **🚀 One-Command Deployment** - Deploy entire infrastructure with `./deploy.sh`
+- **🔄 Fully Idempotent** - Safe to run multiple times
+- **☁️ AWS Infrastructure** - Automated provisioning with Terraform
+- **🎯 High Availability** - Multi-node Swarm cluster
+- **📊 Complete Monitoring** - Prometheus, Grafana, AlertManager
+- **🔒 Security Hardening** - UFW firewall, SSH hardening, secrets management
+- **⚙️ CI/CD Ready** - GitHub Actions workflows for automated deployment
+- **📝 Comprehensive Docs** - Extensive documentation and guides
 
-### Monitoring Stack (stack-monitoring/)
+## 🏗️ Architecture
+
+### Infrastructure
+- **1 Manager Node** - Swarm orchestration (t3.medium)
+- **2 Worker Nodes** - Application workload (t3.medium)
+- **VPC & Networking** - Custom VPC with public/private subnets
+- **Security Groups** - Least privilege access control
+
+### Application Stack
+- **WordPress** (3 replicas) - High-availability web application
+- **MySQL 8.0** (1 replica) - Database with persistent storage
+- **Secrets Management** - Docker Swarm secrets for credentials
+
+### Monitoring Stack
 - **Prometheus** - Metrics collection and alerting
-  - Scrapes metrics from all services
-  - Alert rules for critical events
-  - Data retention with persistent storage
+- **Grafana** - Dashboards and visualization
+- **AlertManager** - Alert routing to Slack
+- **cAdvisor** - Container metrics (global)
+- **Node Exporter** - System metrics (global)
 
-- **Grafana** - Visualization and dashboards
-  - Pre-configured data sources
-  - Custom dashboards for WordPress and MySQL
-  - Accessible on port 3000
-
-- **AlertManager** - Alert routing and notifications
-  - Slack integration for critical alerts
-  - Alert deduplication and grouping
-  - Configurable notification policies
-
-- **cAdvisor** - Container metrics collector
-  - Collects resource usage metrics
-  - Runs on all Swarm nodes (global mode)
-
-- **Node Exporter** - System metrics collector
-  - Collects host-level metrics
-  - Runs on all Swarm nodes (global mode)
-
-### Network Architecture
+### Network Topology
 ```
-┌─────────────────────────────────────────────────────────┐
-│                     Docker Swarm Cluster                │
-│                                                         │
-│  ┌──────────────────────────────────────────────────┐  │
-│  │  Frontend Network (overlay)                      │  │
-│  │    └─ WordPress (3 replicas) :80                 │  │
-│  └──────────────────────────────────────────────────┘  │
-│                          │                              │
-│  ┌──────────────────────────────────────────────────┐  │
-│  │  Backend Network (overlay)                       │  │
-│  │    ├─ WordPress (3 replicas)                     │  │
-│  │    └─ MySQL (1 replica)                          │  │
-│  └──────────────────────────────────────────────────┘  │
-│                          │                              │
-│  ┌──────────────────────────────────────────────────┐  │
-│  │  Monitoring Network (overlay - mon_net)          │  │
-│  │    ├─ Prometheus :9090                           │  │
-│  │    ├─ Grafana :3000                              │  │
-│  │    ├─ AlertManager :9093                         │  │
-│  │    ├─ cAdvisor (global)                          │  │
-│  │    ├─ Node Exporter (global)                     │  │
-│  │    ├─ WordPress (3 replicas)                     │  │
-│  │    └─ MySQL (1 replica)                          │  │
-│  └──────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│                    Docker Swarm Cluster                    │
+│                                                            │
+│  Frontend Network ──> WordPress (port 80)                 │
+│  Backend Network  ──> WordPress <─> MySQL                 │
+│  Monitoring Network ──> All services + monitoring stack   │
+└────────────────────────────────────────────────────────────┘
 ```
 
-## Infrastructure Provisioning
+## 🚀 Quick Start
 
-This repository includes **automated infrastructure provisioning** using Terraform and Ansible to create a production-grade Docker Swarm cluster on AWS EC2.
-
-### Automated Provisioning Features
-- **Terraform**: Provisions AWS VPC, EC2 instances (1 manager + 2 workers), security groups
-- **Ansible**: Installs Docker, initializes Swarm, creates secrets, applies security hardening
-- **GitHub Actions**: Automated workflow for infrastructure deployment
-- **Security**: SSH hardening, UFW firewall, encrypted volumes
-
-### Quick Start - Infrastructure
-
-1. **Configure GitHub Secrets** (Settings → Secrets and variables → Actions):
-   - `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
-   - `SSH_PUBLIC_KEY`, `SSH_PRIVATE_KEY`
-   - `MYSQL_ROOT_PASSWORD`, `MYSQL_PASSWORD`, `SLACK_WEBHOOK_URL`
-
-2. **Trigger Infrastructure Workflow**:
-   ```bash
-   # Make changes to infra/ directory and push to main
-   git push origin main
-   ```
-
-3. **Update Deployment Secret**:
-   - After provisioning, update `SWARM_MANAGER_HOST` secret with manager IP from workflow output
-
-4. **Infrastructure Cleanup** (when needed):
-   - **GitHub Actions → Infrastructure Cleanup → Run workflow**
-   - Type `DESTROY` to confirm and select action (plan-destroy or destroy)
-   - This permanently deletes all AWS resources and data
-
-For detailed infrastructure provisioning guide, see [docs/INFRASTRUCTURE_GUIDE.md](docs/INFRASTRUCTURE_GUIDE.md).
-
-For security hardening details, see [docs/SECURITY_HARDENING.md](docs/SECURITY_HARDENING.md).
-
-## Prerequisites
-
-### Option 1: Automated Infrastructure (Recommended)
-Use the infrastructure provisioning workflow to automatically create:
-- AWS VPC with public/private subnets
-- 3 EC2 instances (1 manager + 2 workers, Ubuntu 22.04, t3.medium)
-- Security groups for Swarm communication
-- Docker installation and Swarm initialization
-- Cost: ~$143-183/month
-
-See [Infrastructure Provisioning](#infrastructure-provisioning) above.
-
-### Option 2: Manual Docker Swarm Cluster
-If you have your own infrastructure:
-- Minimum: 1 manager node
-- Recommended: 1 manager + 2 worker nodes
-- Docker Engine 20.10+ with Swarm mode enabled
-
-Initialize Swarm:
+### Prerequisites
 ```bash
-docker swarm init
+# Required tools
+- Terraform >= 1.6.0
+- Ansible >= 8.0.0
+- AWS CLI
+- Python 3.12+
+- Docker (for local testing)
+
+# AWS Account with:
+- IAM user with EC2, VPC permissions
+- Configured AWS credentials
 ```
 
-Add workers (optional):
-```bash
-# On manager node
-docker swarm join-token worker
-
-# On worker nodes
-docker swarm join --token <TOKEN> <MANAGER-IP>:2377
-```
-
-### Docker Secrets
-Create required secrets on the Swarm manager before deployment:
+### Option 1: One-Command Deployment (Recommended)
 
 ```bash
-# MySQL root password
-echo "your-super-secret-root-password" | docker secret create mysql_root_password -
+# 1. Clone repository
+git clone <repo-url>
+cd redLUIT_Dec2025_Docke04_WordPress
 
-# MySQL WordPress user password
-echo "your-super-secret-wp-password" | docker secret create mysql_password -
+# 2. Set environment variables
+export AWS_REGION="us-east-1"
+export SSH_PUBLIC_KEY="$(cat ~/.ssh/id_rsa.pub)"
+export MYSQL_ROOT_PASSWORD="your_secure_password"
+export MYSQL_PASSWORD="your_app_password"
+export SLACK_WEBHOOK_URL="https://hooks.slack.com/..." # optional
 
-# Slack webhook URL for alerts
-echo "https://hooks.slack.com/services/YOUR/WEBHOOK/URL" | docker secret create slack_webhook_url -
+# 3. Validate setup
+./validate.sh
+
+# 4. Deploy everything
+./deploy.sh
+
+# That's it! 🎉
 ```
 
-Verify secrets:
-```bash
-docker secret ls
-```
-
-### GitHub Secrets (for CI/CD)
-Configure these secrets in your GitHub repository:
-- `MYSQL_ROOT_PASSWORD` - MySQL root password
-- `MYSQL_PASSWORD` - WordPress database user password
-- `SLACK_WEBHOOK_URL` - Slack webhook for AlertManager
-- `SWARM_MANAGER_HOST` - Swarm manager hostname/IP
-- `SSH_USERNAME` - SSH user for deployment
-- `SSH_PRIVATE_KEY` - SSH private key for authentication
-- `DOCKERHUB_USERNAME` - Docker Hub username (optional)
-- `DOCKERHUB_TOKEN` - Docker Hub access token (optional)
-
-## Repository Structure
-
-```
-.
-├── .github/
-│   └── workflows/
-│       ├── deploy.yml                  # Main deployment workflow
-│       ├── infrastructure.yml          # Infrastructure provisioning (Terraform + Ansible)
-│       ├── infrastructure-cleanup.yml  # Infrastructure cleanup (manual trigger only)
-│       ├── compliance.yml              # Compliance checks on PRs
-│       └── python.yml                  # Python environment tests
-├── infra/
-│   ├── terraform/                      # AWS infrastructure as code
-│   │   ├── main.tf                     # Provider and data sources
-│   │   ├── variables.tf                # Input variables
-│   │   ├── outputs.tf                  # Outputs for Ansible
-│   │   ├── vpc.tf                      # VPC, subnets, gateways
-│   │   ├── security-groups.tf          # Security groups
-│   │   ├── ec2.tf                      # EC2 instances
-│   │   └── user-data.sh                # Instance initialization
-│   └── ansible/                        # Configuration management
-│       ├── ansible.cfg                 # Ansible configuration
-│       ├── inventory/                  # Inventory files
-│       ├── playbooks/                  # Ansible playbooks
-│       └── roles/                      # Ansible roles
-├── stack-app/
-│   └── docker-stack.yml         # WordPress + MySQL stack definition
-├── stack-monitoring/
-│   ├── monitoring-stack.yml     # Monitoring stack definition
-│   ├── prometheus.yml           # Prometheus configuration
-│   ├── alert.rules.yml          # Alert rules
-│   └── alertmanager.yml         # AlertManager configuration
-├── tests/
-│   ├── check_required_files.py  # Repository compliance tests
-│   └── test_repo.py             # Basic test suite
-├── .dockerignore                # Docker build exclusions
-├── .gitignore                   # Git exclusions
-├── requirements.txt             # Python dependencies
-└── README.md                    # This file
-```
-
-## Deployment
-
-### Manual Deployment
-
-#### Step 1: Create Docker Secrets
-```bash
-# See Prerequisites section above
-```
-
-#### Step 2: Deploy Monitoring Stack (creates mon_net network)
-```bash
-cd stack-monitoring
-docker stack deploy -c monitoring-stack.yml monitoring
-cd ..
-```
-
-#### Step 3: Deploy Application Stack
-```bash
-docker stack deploy -c stack-app/docker-stack.yml levelop-wp
-```
-
-#### Step 4: Verify Deployment
-```bash
-# Check all services
-docker stack ps levelop-wp
-docker stack ps monitoring
-
-# Check service logs
-docker service logs levelop-wp_wordpress
-docker service logs levelop-wp_mysql
-docker service logs monitoring_prometheus
-
-# Check networks
-docker network ls | grep overlay
-```
-
-### Automated Deployment (GitHub Actions)
-
-Push to `main` branch triggers automatic deployment:
+### Option 2: Step-by-Step Deployment
 
 ```bash
-git add .
-git commit -m "Deploy production changes"
-git push origin main
-```
+# 1. Setup Terraform backend
+cd infra/terraform
+./setup-backend.sh
+terraform init
 
-The workflow will:
-1. Build and tag MySQL and WordPress images
-2. Push images to Docker Hub (optional)
-3. SSH to Swarm manager
-4. Create/verify Docker secrets
-5. Deploy monitoring stack (creates mon_net network)
-6. Deploy application stack (uses mon_net network)
+# 2. Deploy infrastructure
+terraform plan
+terraform apply
 
-## Accessing Services
+# 3. Configure Swarm cluster
+cd ../ansible
+ansible-playbook -i inventory/hosts.ini playbooks/site.yml
 
-### Application
-- **WordPress:** http://your-swarm-ip:80
-
-### Monitoring
-- **Prometheus:** http://your-swarm-ip:9090
-- **Grafana:** http://your-swarm-ip:3000
-  - Default credentials: admin/admin (change on first login)
-- **AlertManager:** http://your-swarm-ip:9093
-
-## Monitoring and Alerts
-
-### Prometheus Metrics
-
-Prometheus collects metrics from:
-- **Prometheus itself** (localhost:9090)
-- **cAdvisor** (cadvisor:8080) - Container metrics
-- **Node Exporter** (node_exporter:9100) - Host metrics
-- **MySQL Exporter** (mysql:9104) - Database metrics (if configured)
-- **WordPress/MySQL tasks** (tasks.mysql:9323, tasks.wordpress:9323)
-
-### Alert Rules
-
-Configured alerts (stack-monitoring/alert.rules.yml):
-
-1. **InstanceDown** (Critical)
-   - Triggers when any monitored instance is unreachable for 2+ minutes
-   - Severity: Critical
-
-2. **ContainerUnhealthy** (Warning)
-   - Triggers when container health checks fail for 5+ minutes
-   - Severity: Warning
-
-3. **ServiceNotAtDesiredReplicas** (Critical)
-   - Triggers when service has fewer running replicas than desired for 3+ minutes
-   - Severity: Critical
-
-### Slack Notifications
-
-AlertManager sends notifications to Slack when:
-- Alerts are triggered (send_resolved: true)
-- Alerts are resolved
-- Channel: #alerts (configurable in alertmanager.yml)
-
-Configure your Slack webhook:
-```bash
-echo "https://hooks.slack.com/services/YOUR/WEBHOOK/URL" | \
-  docker secret create slack_webhook_url -
-```
-
-## Health Checks
-
-### MySQL Health Check
-- **Command:** `mysqladmin ping -h localhost`
-- **Interval:** 10s
-- **Timeout:** 5s
-- **Retries:** 5
-- **Start Period:** 30s
-
-### WordPress Health Check
-- **Command:** `curl -f http://localhost/ || exit 1`
-- **Interval:** 15s
-- **Timeout:** 5s
-- **Retries:** 3
-- **Start Period:** 30s
-
-## Data Persistence
-
-### Volumes
-- `mysql_data` - MySQL database files (/var/lib/mysql)
-- `wp_data` - WordPress content (/var/www/html)
-- `prometheus_data` - Prometheus metrics storage
-- `grafana_data` - Grafana dashboards and settings
-
-Volumes are automatically managed by Docker Swarm and persist across service updates.
-
-### Backup Strategy
-
-Backup MySQL data:
-```bash
-docker exec $(docker ps -qf "name=levelop-wp_mysql") \
-  mysqldump -p wordpress > backup-$(date +%Y%m%d).sql
-```
-
-Backup WordPress content:
-```bash
-docker run --rm \
-  -v levelop-wp_wp_data:/data \
-  -v $(pwd):/backup \
-  alpine tar czf /backup/wordpress-$(date +%Y%m%d).tar.gz /data
-```
-
-## Scaling
-
-Scale WordPress replicas:
-```bash
-docker service scale levelop-wp_wordpress=5
-```
-
-MySQL should remain at 1 replica (not designed for multi-master).
-
-## Troubleshooting
-
-### Check Service Status
-```bash
-docker stack ps levelop-wp --no-trunc
-docker service ls
-```
-
-### View Logs
-```bash
-# Application logs
-docker service logs -f levelop-wp_wordpress
-docker service logs -f levelop-wp_mysql
-
-# Monitoring logs
-docker service logs -f monitoring_prometheus
-docker service logs -f monitoring_grafana
-```
-
-### Common Issues
-
-**WordPress can't connect to database:**
-- Verify secrets exist: `docker secret ls`
-- Check MySQL health: `docker service ps levelop-wp_mysql`
-- Verify backend network: `docker network inspect levelop-wp_backend`
-
-**Monitoring not collecting metrics:**
-- Verify mon_net network exists: `docker network ls | grep mon_net`
-- Check Prometheus targets: http://your-swarm-ip:9090/targets
-- Verify services are on mon_net: `docker service inspect levelop-wp_mysql`
-
-**Alerts not reaching Slack:**
-- Verify slack_webhook_url secret exists
-- Check AlertManager logs: `docker service logs monitoring_alertmanager`
-- Test webhook URL manually with curl
-
-### Reset Everything
-```bash
-# Remove all stacks
-docker stack rm levelop-wp
-docker stack rm monitoring
-
-# Wait for cleanup
-sleep 30
-
-# Remove volumes (WARNING: Deletes all data!)
-docker volume rm levelop-wp_mysql_data levelop-wp_wp_data
-docker volume rm monitoring_prometheus_data monitoring_grafana_data
-
-# Redeploy
+# 4. Deploy stacks
+# SSH to manager and run:
 docker stack deploy -c stack-monitoring/monitoring-stack.yml monitoring
 docker stack deploy -c stack-app/docker-stack.yml levelop-wp
 ```
 
-## Development and Testing
+### Option 3: CI/CD Deployment
 
-### Run Tests Locally
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+# 1. Configure GitHub Secrets
+Settings → Secrets → Actions:
+  - AWS_ACCESS_KEY_ID
+  - AWS_SECRET_ACCESS_KEY
+  - SSH_PUBLIC_KEY
+  - SSH_PRIVATE_KEY
+  - MYSQL_ROOT_PASSWORD
+  - MYSQL_PASSWORD
+  - SLACK_WEBHOOK_URL
 
-# Run compliance checks
-python tests/check_required_files.py
+# 2. Push to main branch
+git push origin main
 
-# Run pytest
-pytest tests/
+# 3. GitHub Actions deploys automatically
+# Watch: Actions tab → Main Deployment Pipeline
 ```
 
-### Lint YAML Files
+## 📋 Scripts
+
+| Script | Purpose | Usage |
+|--------|---------|-------|
+| `deploy.sh` | One-command full deployment | `./deploy.sh` |
+| `validate.sh` | Pre-flight validation | `./validate.sh` |
+| `destroy.sh` | Destroy all infrastructure | `./destroy.sh` |
+
+## 🔧 Configuration
+
+### Environment Variables
+
+Create `.env` file (optional):
 ```bash
-pip install yamllint
-yamllint stack-app/ stack-monitoring/
+export AWS_REGION="us-east-1"
+export SSH_PUBLIC_KEY="$(cat ~/.ssh/id_rsa.pub)"
+export MYSQL_ROOT_PASSWORD="change_this_password"
+export MYSQL_PASSWORD="change_this_too"
+export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/..."
 ```
 
-## Security Best Practices
+Then: `source .env`
 
-- Secrets stored in Docker Swarm encrypted storage
-- No plaintext passwords in repository
-- Health checks prevent serving unhealthy containers
-- Overlay networks isolate traffic
-- Regular security updates via base image pulls
-- GitHub Actions uses SSH key authentication
+### Terraform Variables
 
-## Production Checklist
+Edit `infra/terraform/terraform.tfvars`:
+```hcl
+aws_region = "us-east-1"
+project_name = "wordpress-swarm"
+manager_instance_type = "t3.medium"
+worker_instance_type = "t3.medium"
+worker_count = 2
+```
 
-- [ ] Docker Swarm initialized with 3+ nodes
-- [ ] All secrets created (mysql_root_password, mysql_password, slack_webhook_url)
-- [ ] Slack webhook configured and tested
-- [ ] Monitoring stack deployed and verified
-- [ ] Application stack deployed and verified
-- [ ] WordPress initial setup completed
-- [ ] Grafana dashboards configured
-- [ ] Backup strategy implemented
-- [ ] DNS/Load balancer configured for port 80
-- [ ] SSL/TLS termination configured (e.g., Traefik, nginx)
-- [ ] Resource limits tuned for your workload
-- [ ] Alerting tested and verified
+### Ansible Variables
 
-## Future Enhancements
+Edit `infra/ansible/inventory/group_vars/all.yml`:
+```yaml
+docker_version: "latest"
+swarm_manager_expected_count: 1
+swarm_worker_expected_count: 2
+```
 
-- Add Traefik for SSL/TLS termination and routing
-- Implement automated backups with cron
-- Add Redis for WordPress object caching
-- Configure MySQL replication for HA
-- Add Loki for log aggregation
-- Implement centralized secrets management (Vault)
-- Add security scanning (Trivy, Clair)
-- Configure autoscaling based on metrics
+## 📊 Access Services
 
-## Contributing
+After deployment:
+
+| Service | URL | Credentials |
+|---------|-----|-------------|
+| WordPress | `http://<MANAGER_IP>` | Setup on first visit |
+| Grafana | `http://<MANAGER_IP>:3000` | admin / admin |
+| Prometheus | `http://<MANAGER_IP>:9090` | No auth |
+| AlertManager | `http://<MANAGER_IP>:9093` | No auth |
+
+Get manager IP:
+```bash
+cd infra/terraform
+terraform output swarm_manager_public_ip
+```
+
+## 🛠️ Management
+
+### Check Cluster Status
+```bash
+ssh ubuntu@<MANAGER_IP> 'docker node ls'
+ssh ubuntu@<MANAGER_IP> 'docker service ls'
+ssh ubuntu@<MANAGER_IP> 'docker stack ps levelop-wp'
+```
+
+### View Logs
+```bash
+ssh ubuntu@<MANAGER_IP> 'docker service logs levelop-wp_wordpress'
+ssh ubuntu@<MANAGER_IP> 'docker service logs levelop-wp_mysql'
+```
+
+### Scale Services
+```bash
+ssh ubuntu@<MANAGER_IP> 'docker service scale levelop-wp_wordpress=5'
+```
+
+### Update Service
+```bash
+ssh ubuntu@<MANAGER_IP> 'docker service update --image wordpress:latest levelop-wp_wordpress'
+```
+
+## 🔄 Workflows
+
+### GitHub Actions Workflows
+
+| Workflow | Trigger | Purpose |
+|----------|---------|---------|
+| `main-deployment.yml` | Push to main | Full deployment pipeline |
+| `pr-validation.yml` | PR to dev/main | Validation and testing |
+| `infrastructure.yml` | Manual | Standalone infra operations |
+| `infrastructure-cleanup.yml` | Manual | Destroy infrastructure |
+| `deploy.yml` | Manual | Standalone deployment |
+
+### Deployment Pipeline
+
+```
+Push to main
+    ↓
+Validations (tests, linting, compliance)
+    ↓
+Infrastructure (Terraform + Ansible)
+    ↓
+Deployment (Docker stacks)
+    ↓
+Verification
+```
+
+## 🔒 Security
+
+- **SSH Hardening** - Key-only auth, root login disabled
+- **UFW Firewall** - Minimal open ports
+- **Docker Secrets** - Encrypted credential storage
+- **Security Groups** - Network access control
+- **Encrypted Volumes** - EBS encryption enabled
+- **fail2ban** - Brute force protection
+- **Auto Updates** - Security patches applied automatically
+
+## 📁 Directory Structure
+
+```
+.
+├── deploy.sh                 # One-command deployment
+├── validate.sh               # Pre-flight validation
+├── destroy.sh                # Infrastructure cleanup
+├── README.md                 # This file
+│
+├── .github/workflows/        # CI/CD workflows
+│   ├── main-deployment.yml   # Main pipeline
+│   ├── pr-validation.yml     # PR checks
+│   ├── infrastructure.yml    # Infra operations
+│   └── infrastructure-cleanup.yml
+│
+├── infra/                    # Infrastructure code
+│   ├── terraform/            # AWS provisioning
+│   │   ├── backend.tf
+│   │   ├── main.tf
+│   │   ├── vpc.tf
+│   │   ├── ec2.tf
+│   │   ├── security-groups.tf
+│   │   └── setup-backend.sh
+│   │
+│   └── ansible/              # Configuration management
+│       ├── playbooks/
+│       ├── roles/
+│       │   ├── docker-engine/
+│       │   ├── security-hardening/
+│       │   ├── swarm-init/
+│       │   └── swarm-secrets/
+│       └── inventory/
+│
+├── stack-app/                # WordPress stack
+│   └── docker-stack.yml
+│
+├── stack-monitoring/         # Monitoring stack
+│   ├── monitoring-stack.yml
+│   ├── prometheus.yml
+│   ├── alert.rules.yml
+│   └── alertmanager.yml
+│
+├── tests/                    # Validation tests
+│   ├── test_infrastructure.py
+│   └── test_repo.py
+│
+└── docs/                     # Documentation
+    ├── DEPLOYMENT_GUIDE.md
+    ├── INFRASTRUCTURE_GUIDE.md
+    ├── MONITORING_GUIDE.md
+    └── SECURITY_HARDENING.md
+```
+
+## 🧪 Testing
+
+### Run Validation
+```bash
+./validate.sh
+```
+
+### Run Tests
+```bash
+pytest tests/ -v
+```
+
+### Syntax Check
+```bash
+# Terraform
+cd infra/terraform
+terraform validate
+
+# Ansible
+cd infra/ansible
+ansible-playbook playbooks/site.yml --syntax-check
+
+# Docker Compose
+docker compose -f stack-app/docker-stack.yml config
+```
+
+## 📚 Documentation
+
+| Document | Description |
+|----------|-------------|
+| [DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md) | Detailed deployment instructions |
+| [INFRASTRUCTURE_GUIDE.md](docs/INFRASTRUCTURE_GUIDE.md) | Infrastructure architecture |
+| [MONITORING_GUIDE.md](docs/MONITORING_GUIDE.md) | Monitoring setup and dashboards |
+| [SECURITY_HARDENING.md](docs/SECURITY_HARDENING.md) | Security best practices |
+| [IDEMPOTENT_INFRASTRUCTURE.md](infra/IDEMPOTENT_INFRASTRUCTURE.md) | Idempotency details |
+| [Ansible README](infra/ansible/README.md) | Ansible configuration |
+| [Terraform QUICK_START](infra/terraform/QUICK_START.md) | Terraform quick start |
+
+## 🗑️ Cleanup
+
+### Destroy Everything
+```bash
+./destroy.sh
+```
+
+### Or manually:
+```bash
+cd infra/terraform
+terraform destroy
+```
+
+### Post-Cleanup
+- Verify in AWS Console all resources deleted
+- Check for orphaned EBS snapshots
+- Remove GitHub secrets if not reusing
+
+## 🐛 Troubleshooting
+
+### SSH Connection Fails
+```bash
+# Check security group
+# Verify SSH key is correct
+chmod 600 ~/.ssh/id_rsa
+ssh -i ~/.ssh/id_rsa ubuntu@<MANAGER_IP>
+```
+
+### Terraform Errors
+```bash
+# Re-initialize
+terraform init -reconfigure
+
+# Check state
+terraform state list
+
+# Import existing resources
+terraform import aws_vpc.main vpc-xxxxx
+```
+
+### Ansible Fails
+```bash
+# Test connectivity
+ansible all -m ping -i inventory/hosts.ini
+
+# Run with verbosity
+ansible-playbook -i inventory/hosts.ini playbooks/site.yml -vvv
+```
+
+### Service Not Starting
+```bash
+# Check service status
+docker service ps <service_name> --no-trunc
+
+# View logs
+docker service logs <service_name>
+
+# Inspect service
+docker service inspect <service_name>
+```
+
+## 💰 Cost Estimate
+
+AWS resources (us-east-1):
+- EC2 instances (3x t3.medium): ~$100/month
+- EBS volumes (3x 30GB): ~$9/month
+- NAT Gateway: ~$32/month
+- Data transfer: Variable
+
+**Total: ~$150/month** (can be reduced with Reserved Instances)
+
+## 🤝 Contributing
 
 1. Fork the repository
-2. Create a feature branch
-3. Make changes and test locally
-4. Submit a pull request to `main`
-5. Ensure CI checks pass
+2. Create feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit changes (`git commit -m 'Add amazing feature'`)
+4. Push to branch (`git push origin feature/amazing-feature`)
+5. Open Pull Request
 
-## License
+## 📝 License
 
-See LICENSE file for details.
+MIT License - see [LICENSE](LICENSE) file
 
-## Support
+## 🙏 Acknowledgments
 
-For issues and questions:
-- Open an issue in this repository
-- Check Docker Swarm documentation
-- Review Prometheus/Grafana documentation
+- Docker Swarm documentation
+- Terraform AWS provider
+- Ansible community
+- Prometheus & Grafana projects
+
+## 📞 Support
+
+- **Issues**: [GitHub Issues](../../issues)
+- **Discussions**: [GitHub Discussions](../../discussions)
+- **Documentation**: [docs/](docs/)
 
 ---
 
-**Last Updated:** December 2025
-**Repository:** redLUIT_Dec2025_Docke04_WordPress
-**Stack Version:** 3.8
+**Made with ❤️ for production deployments**
+
+**Quick Links:**
+- [Deploy Now](#quick-start)
+- [View Workflows](.github/workflows/)
+- [Read Docs](docs/)
+- [Report Issue](../../issues/new)
