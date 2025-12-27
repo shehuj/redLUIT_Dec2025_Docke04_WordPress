@@ -1,54 +1,46 @@
 ---
-# Docker Swarm initialization
-
+# Check Swarm status
 - name: Check if Swarm is already initialized
-  shell: docker info --format '{{"{{"}}.Swarm.LocalNodeState{{"}}"}}'
+  ansible.builtin.shell: docker info --format '{{"{{"}}.Swarm.LocalNodeState{{"}}"}}'
   register: swarm_status
   changed_when: false
   failed_when: false
 
-- name: Leave Swarm if in error state (workers)
-  command: docker swarm leave --force
-  when:
-    - inventory_hostname in groups['swarm_workers']
-    - swarm_status.stdout == 'error'
-  failed_when: false
-  changed_when: true
+# Leave swarm if in an error state (force)
+- name: Leave swarm if in error state
+  ansible.builtin.command: docker swarm leave --force
+  when: swarm_status.stdout == 'error'
 
-- name: Leave Swarm if in error state (managers)
-  command: docker swarm leave --force
-  when:
-    - inventory_hostname in groups['swarm_managers']
-    - swarm_status.stdout == 'error'
-  failed_when: false
-  changed_when: true
-
-- name: Re-check Swarm status after reset
-  shell: docker info --format '{{"{{"}}.Swarm.LocalNodeState{{"}}"}}'
+# Re-check status after leave if needed
+- name: Re-check Swarm status after force leave
+  ansible.builtin.shell: docker info --format '{{"{{"}}.Swarm.LocalNodeState{{"}}"}}'
   register: swarm_status
   changed_when: false
   failed_when: false
   when: swarm_status.stdout == 'error'
 
+# Initialize Swarm on the first manager if not active
 - name: Initialize Docker Swarm on manager
-  command: >
+  ansible.builtin.command: >
     docker swarm init
     --advertise-addr {{ ansible_default_ipv4.address }}
   when:
     - inventory_hostname in groups['swarm_managers']
     - swarm_status.stdout != 'active'
-  register: swarm_init_result
+  register: swarm_init
+  changed_when: "'Swarm initialized' in swarm_init.stdout"
 
+# Get worker join token (from first manager only)
 - name: Get worker join token
-  command: docker swarm join-token -q worker
+  ansible.builtin.command: docker swarm join-token -q worker
   register: worker_token
-  when: inventory_hostname in groups['swarm_managers']
+  when: inventory_hostname == groups['swarm_managers'][0]
   changed_when: false
-  delegate_to: "{{ groups['swarm_managers'][0] }}"
   run_once: true
 
-- name: Join workers to Swarm
-  command: >
+# Join workers if not already active
+- name: Join worker to Swarm
+  ansible.builtin.command: >
     docker swarm join
     --token {{ worker_token.stdout }}
     {{ hostvars[groups['swarm_managers'][0]]['ansible_default_ipv4']['address'] }}:2377
@@ -57,15 +49,17 @@
     - swarm_status.stdout != 'active'
   register: join_result
   failed_when: false
-  changed_when: join_result.rc == 0
+  changed_when: "'This node joined a swarm' in join_result.stdout"
 
-- name: Wait for workers to join (background process may still be completing)
-  pause:
-    seconds: 30
+# Wait for workers to settle
+- name: Wait for workers to join
+  ansible.builtin.pause:
+    seconds: 15
   when: inventory_hostname in groups['swarm_workers']
 
+# Verify worker status is active
 - name: Verify worker joined successfully
-  shell: docker info --format '{{"{{"}}.Swarm.LocalNodeState{{"}}"}}'
+  ansible.builtin.shell: docker info --format '{{"{{"}}.Swarm.LocalNodeState{{"}}"}}'
   register: final_status
   until: final_status.stdout == 'active'
   retries: 6
@@ -73,30 +67,32 @@
   when: inventory_hostname in groups['swarm_workers']
   changed_when: false
 
-- name: Show worker status if join failed
-  debug:
+# Show status message on fail
+- name: Debug worker join failure
+  ansible.builtin.debug:
     msg: |
       Worker status: {{ final_status.stdout }}
-      If status is 'error', check:
-      1. UFW rules: sudo ufw status
-      2. Security groups allow port 2377 from workers
-      3. Manager is reachable: telnet {{ hostvars[groups['swarm_managers'][0]]['ansible_default_ipv4']['address'] }} 2377
+      If not 'active', ensure:
+        - Manager reachable on port 2377
+        - Security groups / firewall rules allow communication
+        - Join token correct
   when:
     - inventory_hostname in groups['swarm_workers']
     - final_status.stdout != 'active'
   failed_when: final_status.stdout != 'active'
 
-- name: Verify Swarm cluster status
-  command: docker node ls
+# Show nodes on manager
+- name: Verify Swarm cluster nodes
+  ansible.builtin.command: docker node ls
   register: node_list
   when: inventory_hostname in groups['swarm_managers']
   changed_when: false
   retries: 3
-  delay: 10
+  delay: 8
   until: node_list.rc == 0
 
 - name: Display Swarm cluster nodes
-  debug:
+  ansible.builtin.debug:
     msg: "{{ node_list.stdout_lines }}"
   when:
     - inventory_hostname in groups['swarm_managers']
