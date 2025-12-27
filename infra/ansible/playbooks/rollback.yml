@@ -1,0 +1,299 @@
+---
+# Production Rollback Playbook
+# Rolls back Docker Swarm services to previous versions
+# Use when deployment causes issues
+
+- name: Rollback Confirmation
+  hosts: localhost
+  gather_facts: false
+
+  vars_prompt:
+    - name: rollback_target
+      prompt: "Which component to rollback? (stack/monitoring/jenkins/all)"
+      private: false
+
+    - name: confirm_rollback
+      prompt: "WARNING: This will rollback to previous version. Type 'ROLLBACK' to confirm"
+      private: false
+
+  tasks:
+    - name: Verify confirmation
+      ansible.builtin.assert:
+        that:
+          - confirm_rollback == "ROLLBACK"
+          - rollback_target in ['stack', 'monitoring', 'jenkins', 'all']
+        fail_msg: "Rollback cancelled or invalid target specified"
+        success_msg: "Rollback confirmed for {{ rollback_target }}"
+
+    - name: Set rollback target fact
+      ansible.builtin.set_fact:
+        target_component: "{{ rollback_target }}"
+
+- name: Pre-Rollback Snapshot
+  hosts: swarm_manager
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Capture current state before rollback
+      ansible.builtin.command: docker service ls --format '{{ '{{' }}.Name{{ '}}' }}\t{{ '{{' }}.Image{{ '}}' }}\t{{ '{{' }}.Replicas{{ '}}' }}'
+      register: pre_rollback_state
+      changed_when: false
+
+    - name: Save pre-rollback state
+      ansible.builtin.copy:
+        content: |
+          Rollback initiated at: {{ ansible_date_time.iso8601 }}
+          Target: {{ hostvars['localhost']['target_component'] }}
+
+          Services before rollback:
+          {{ pre_rollback_state.stdout }}
+        dest: "/tmp/rollback_{{ ansible_date_time.epoch }}.log"
+        mode: '0644'
+
+    - name: Display current state
+      ansible.builtin.debug:
+        msg:
+          - "Current service state captured"
+          - "{{ pre_rollback_state.stdout_lines }}"
+
+- name: Rollback Docker Stack Services
+  hosts: swarm_manager
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Get list of stacks
+      ansible.builtin.shell: docker stack ls --format '{{ '{{' }}.Name{{ '}}' }}' | grep -v jenkins | grep -v monitoring
+      register: stack_list
+      changed_when: false
+      when: hostvars['localhost']['target_component'] in ['stack', 'all']
+
+    - name: Rollback stack services
+      ansible.builtin.shell: |
+        for service in $(docker stack services {{ item }} --format '{{ '{{' }}.Name{{ '}}' }}'); do
+          echo "Rolling back $service..."
+          docker service update --rollback $service
+        done
+      loop: "{{ stack_list.stdout_lines }}"
+      when:
+        - hostvars['localhost']['target_component'] in ['stack', 'all']
+        - stack_list.stdout_lines | length > 0
+      register: stack_rollback
+      changed_when: true
+
+    - name: Wait for stack rollback to complete
+      ansible.builtin.pause:
+        seconds: 30
+      when: stack_rollback is changed
+
+    - name: Verify stack services after rollback
+      ansible.builtin.command: docker service ls --filter "label=com.docker.stack.namespace" --format '{{ '{{' }}.Name{{ '}}' }}\t{{ '{{' }}.Replicas{{ '}}' }}'
+      register: stack_status
+      when: hostvars['localhost']['target_component'] in ['stack', 'all']
+      changed_when: false
+
+    - name: Display stack status
+      ansible.builtin.debug:
+        msg: "{{ stack_status.stdout_lines }}"
+      when: stack_status is defined
+
+- name: Rollback Monitoring Stack
+  hosts: monitoring
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Stop monitoring services
+      ansible.builtin.command:
+        cmd: docker compose down
+        chdir: /opt/monitoring
+      when: hostvars['localhost']['target_component'] in ['monitoring', 'all']
+      changed_when: true
+
+    - name: Find previous monitoring backup
+      ansible.builtin.find:
+        paths: /var/backups/monitoring
+        file_type: directory
+        age: -7d
+      register: monitoring_backups
+      when: hostvars['localhost']['target_component'] in ['monitoring', 'all']
+
+    - name: Get most recent backup
+      ansible.builtin.set_fact:
+        latest_backup: "{{ monitoring_backups.files | sort(attribute='mtime', reverse=true) | first }}"
+      when:
+        - hostvars['localhost']['target_component'] in ['monitoring', 'all']
+        - monitoring_backups.matched > 0
+
+    - name: Restore monitoring configs from backup
+      ansible.builtin.synchronize:
+        src: "{{ latest_backup.path }}/configs/"
+        dest: /opt/monitoring/
+        delete: false
+      delegate_to: "{{ inventory_hostname }}"
+      when:
+        - hostvars['localhost']['target_component'] in ['monitoring', 'all']
+        - latest_backup is defined
+
+    - name: Start monitoring services
+      ansible.builtin.command:
+        cmd: docker compose up -d
+        chdir: /opt/monitoring
+      when: hostvars['localhost']['target_component'] in ['monitoring', 'all']
+      changed_when: true
+
+    - name: Wait for monitoring to stabilize
+      ansible.builtin.pause:
+        seconds: 30
+      when: hostvars['localhost']['target_component'] in ['monitoring', 'all']
+
+    - name: Verify Prometheus after rollback
+      ansible.builtin.uri:
+        url: "http://localhost:9090/-/healthy"
+        status_code: 200
+      register: prometheus_health
+      retries: 5
+      delay: 10
+      when: hostvars['localhost']['target_component'] in ['monitoring', 'all']
+
+    - name: Verify Grafana after rollback
+      ansible.builtin.uri:
+        url: "http://localhost:3000/api/health"
+        status_code: 200
+      register: grafana_health
+      retries: 5
+      delay: 10
+      when: hostvars['localhost']['target_component'] in ['monitoring', 'all']
+
+- name: Rollback Jenkins Service
+  hosts: swarm_manager
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Check if Jenkins service exists
+      ansible.builtin.shell: docker service ls --filter "name=jenkins_jenkins" --format '{{ '{{' }}.Name{{ '}}' }}'
+      register: jenkins_exists
+      changed_when: false
+      when: hostvars['localhost']['target_component'] in ['jenkins', 'all']
+
+    - name: Rollback Jenkins service
+      ansible.builtin.command: docker service update --rollback jenkins_jenkins
+      when:
+        - hostvars['localhost']['target_component'] in ['jenkins', 'all']
+        - jenkins_exists.stdout != ""
+      register: jenkins_rollback
+      changed_when: true
+
+    - name: Wait for Jenkins rollback
+      ansible.builtin.pause:
+        seconds: 60
+      when: jenkins_rollback is changed
+
+    - name: Check Jenkins service status
+      ansible.builtin.command: docker service ps jenkins_jenkins --format '{{ '{{' }}.CurrentState{{ '}}' }}'
+      register: jenkins_status
+      when:
+        - hostvars['localhost']['target_component'] in ['jenkins', 'all']
+        - jenkins_exists.stdout != ""
+      changed_when: false
+
+    - name: Display Jenkins status
+      ansible.builtin.debug:
+        msg: "{{ jenkins_status.stdout_lines }}"
+      when: jenkins_status is defined
+
+- name: Post-Rollback Validation
+  hosts: swarm_manager
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Wait for all services to stabilize
+      ansible.builtin.pause:
+        seconds: 30
+
+    - name: Check all service replicas
+      ansible.builtin.command: docker service ls --format '{{ '{{' }}.Name{{ '}}' }}\t{{ '{{' }}.Replicas{{ '}}' }}'
+      register: final_services
+      changed_when: false
+
+    - name: Get services with issues
+      ansible.builtin.shell: docker service ls --format '{{ '{{' }}.Name{{ '}}' }}\t{{ '{{' }}.Replicas{{ '}}' }}' | grep -v "/"
+      register: problem_services
+      failed_when: false
+      changed_when: false
+
+    - name: Report problem services
+      ansible.builtin.debug:
+        msg:
+          - "WARNING: Services with replica issues:"
+          - "{{ problem_services.stdout_lines }}"
+      when: problem_services.stdout != ""
+
+    - name: Check node status
+      ansible.builtin.command: docker node ls --format '{{ '{{' }}.Hostname{{ '}}' }}\t{{ '{{' }}.Status{{ '}}' }}\t{{ '{{' }}.Availability{{ '}}' }}'
+      register: node_status
+      changed_when: false
+
+    - name: Verify no nodes are down
+      ansible.builtin.assert:
+        that:
+          - "'Down' not in node_status.stdout"
+        fail_msg: "WARNING: One or more nodes are down after rollback"
+        success_msg: "All nodes are healthy after rollback"
+      ignore_errors: true
+
+- name: Rollback Summary Report
+  hosts: swarm_manager
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Capture post-rollback state
+      ansible.builtin.command: docker service ls --format '{{ '{{' }}.Name{{ '}}' }}\t{{ '{{' }}.Image{{ '}}' }}\t{{ '{{' }}.Replicas{{ '}}' }}'
+      register: post_rollback_state
+      changed_when: false
+
+    - name: Generate rollback report
+      ansible.builtin.copy:
+        content: |
+          =========================================
+                  ROLLBACK SUMMARY REPORT
+          =========================================
+
+          Rollback completed at: {{ ansible_date_time.iso8601 }}
+          Target component: {{ hostvars['localhost']['target_component'] }}
+
+          Services after rollback:
+          {{ post_rollback_state.stdout }}
+
+          =========================================
+
+          Next Steps:
+          1. Verify application functionality
+          2. Check monitoring dashboards
+          3. Review logs for any errors
+          4. Investigate root cause of failed deployment
+          5. Plan corrective actions before redeployment
+
+          =========================================
+        dest: "/var/log/rollback_{{ ansible_date_time.epoch }}.log"
+        mode: '0644'
+
+    - name: Display rollback summary
+      ansible.builtin.debug:
+        msg:
+          - "========================================="
+          - "   Rollback Completed"
+          - "========================================="
+          - "Component: {{ hostvars['localhost']['target_component'] }}"
+          - "Timestamp: {{ ansible_date_time.iso8601 }}"
+          - ""
+          - "Current Service State:"
+          - "{{ post_rollback_state.stdout_lines }}"
+          - ""
+          - "IMPORTANT: Verify all services manually"
+          - "Report saved to: /var/log/rollback_{{ ansible_date_time.epoch }}.log"
+          - "========================================="

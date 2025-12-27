@@ -1,0 +1,250 @@
+---
+# Production Health Check Playbook
+# Validates entire Docker Swarm infrastructure
+# Run schedule: Every 15 minutes in production
+
+- name: Health Check - Docker Swarm Cluster
+  hosts: swarm_manager
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Check Docker service status
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+      check_mode: true
+      register: docker_service
+
+    - name: Get Swarm status
+      ansible.builtin.command: docker info --format '{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}'
+      register: swarm_status
+      changed_when: false
+
+    - name: Verify Swarm is active
+      ansible.builtin.assert:
+        that:
+          - swarm_status.stdout == "active"
+        fail_msg: "Swarm is not active on manager node"
+        success_msg: "Swarm is active"
+
+    - name: Get all nodes
+      ansible.builtin.command: docker node ls --format '{{ '{{' }}.Hostname{{ '}}' }}\t{{ '{{' }}.Status{{ '}}' }}\t{{ '{{' }}.Availability{{ '}}' }}'
+      register: swarm_nodes
+      changed_when: false
+
+    - name: Check for down nodes
+      ansible.builtin.assert:
+        that:
+          - "'Down' not in swarm_nodes.stdout"
+        fail_msg: "One or more nodes are down"
+        success_msg: "All nodes are up"
+      ignore_errors: true
+
+    - name: Get deployed stacks
+      ansible.builtin.shell: docker stack ls --format '{{ '{{' }}.Name{{ '}}' }}' 2>/dev/null || echo "none"
+      register: deployed_stacks
+      changed_when: false
+
+    - name: Check stack services
+      ansible.builtin.command: docker stack services {{ item }} --format '{{ '{{' }}.Name{{ '}}' }}\t{{ '{{' }}.Replicas{{ '}}' }}'
+      loop: "{{ deployed_stacks.stdout_lines }}"
+      when: deployed_stacks.stdout != "none"
+      register: stack_services
+      changed_when: false
+
+    - name: Display stack health
+      ansible.builtin.debug:
+        msg:
+          - "Stack: {{ item.item }}"
+          - "{{ item.stdout_lines }}"
+      loop: "{{ stack_services.results }}"
+      when: stack_services is defined and stack_services.results | length > 0
+
+- name: Health Check - Worker Nodes
+  hosts: swarm_worker
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Check Docker service on workers
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+      check_mode: true
+      register: docker_worker
+
+    - name: Check disk space
+      ansible.builtin.shell: df -h / | tail -1 | awk '{print $5}' | sed 's/%//'
+      register: disk_usage
+      changed_when: false
+
+    - name: Warn if disk usage high
+      ansible.builtin.debug:
+        msg: "WARNING: Disk usage is {{ disk_usage.stdout }}% on {{ inventory_hostname }}"
+      when: disk_usage.stdout | int > 80
+
+    - name: Check memory usage
+      ansible.builtin.shell: free | grep Mem | awk '{printf "%.0f", $3/$2 * 100.0}'
+      register: memory_usage
+      changed_when: false
+
+    - name: Warn if memory usage high
+      ansible.builtin.debug:
+        msg: "WARNING: Memory usage is {{ memory_usage.stdout }}% on {{ inventory_hostname }}"
+      when: memory_usage.stdout | int > 90
+
+    - name: Check running containers
+      ansible.builtin.command: docker ps --format '{{ '{{' }}.Names{{ '}}' }}\t{{ '{{' }}.Status{{ '}}' }}'
+      register: running_containers
+      changed_when: false
+
+    - name: Display running containers
+      ansible.builtin.debug:
+        msg: "{{ running_containers.stdout_lines }}"
+
+- name: Health Check - Exporters
+  hosts: all
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Check node-exporter status
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:9100/metrics"
+        status_code: 200
+        timeout: 5
+      register: node_exporter_health
+      failed_when: false
+      changed_when: false
+
+    - name: Check cAdvisor status
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:8080/metrics"
+        status_code: 200
+        timeout: 5
+      register: cadvisor_health
+      failed_when: false
+      changed_when: false
+
+    - name: Report exporter issues
+      ansible.builtin.debug:
+        msg:
+          - "Node Exporter: {{ 'OK' if node_exporter_health.status == 200 else 'FAILED' }}"
+          - "cAdvisor: {{ 'OK' if cadvisor_health.status == 200 else 'FAILED' }}"
+
+- name: Health Check - Monitoring Stack
+  hosts: monitoring
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Check Prometheus health
+      ansible.builtin.uri:
+        url: "http://localhost:9090/-/healthy"
+        status_code: 200
+        timeout: 10
+      register: prometheus_health
+      retries: 3
+      delay: 5
+
+    - name: Check Grafana health
+      ansible.builtin.uri:
+        url: "http://localhost:3000/api/health"
+        status_code: 200
+        timeout: 10
+      register: grafana_health
+      retries: 3
+      delay: 5
+
+    - name: Query Prometheus targets
+      ansible.builtin.uri:
+        url: "http://localhost:9090/api/v1/targets"
+        return_content: true
+      register: prometheus_targets
+      changed_when: false
+
+    - name: Check for unhealthy targets
+      ansible.builtin.set_fact:
+        unhealthy_targets: "{{ prometheus_targets.json.data.activeTargets | selectattr('health', 'ne', 'up') | list }}"
+
+    - name: Report unhealthy Prometheus targets
+      ansible.builtin.debug:
+        msg:
+          - "WARNING: {{ unhealthy_targets | length }} unhealthy targets found"
+          - "{{ unhealthy_targets | map(attribute='labels') | list }}"
+      when: unhealthy_targets | length > 0
+
+    - name: Check Prometheus data retention
+      ansible.builtin.shell: |
+        du -sh /var/lib/docker/volumes/monitoring_prometheus_data/_data 2>/dev/null | awk '{print $1}'
+      register: prometheus_data_size
+      changed_when: false
+
+    - name: Check Grafana data size
+      ansible.builtin.shell: |
+        du -sh /var/lib/docker/volumes/monitoring_grafana_data/_data 2>/dev/null | awk '{print $1}'
+      register: grafana_data_size
+      changed_when: false
+
+    - name: Display monitoring data usage
+      ansible.builtin.debug:
+        msg:
+          - "Prometheus data: {{ prometheus_data_size.stdout }}"
+          - "Grafana data: {{ grafana_data_size.stdout }}"
+
+- name: Health Check - Jenkins (if deployed)
+  hosts: swarm_manager
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Check if Jenkins service exists
+      ansible.builtin.shell: docker service ls --filter "name=jenkins_jenkins" --format '{{ '{{' }}.Name{{ '}}' }}'
+      register: jenkins_exists
+      changed_when: false
+
+    - name: Check Jenkins health endpoint
+      ansible.builtin.uri:
+        url: "http://{{ hostvars[inventory_hostname].ansible_host }}:8081/login"
+        status_code: 200
+        timeout: 10
+      register: jenkins_health
+      when: jenkins_exists.stdout != ""
+      failed_when: false
+
+    - name: Report Jenkins status
+      ansible.builtin.debug:
+        msg: "Jenkins: {{ 'Running' if jenkins_health.status == 200 else 'Not responding' }}"
+      when: jenkins_exists.stdout != ""
+
+- name: Health Check Summary
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Generate health report timestamp
+      ansible.builtin.set_fact:
+        health_check_time: "{{ lookup('pipe', 'date +%Y-%m-%d_%H:%M:%S') }}"
+
+    - name: Display health check summary
+      ansible.builtin.debug:
+        msg:
+          - "========================================="
+          - "   Health Check Summary"
+          - "========================================="
+          - "Timestamp: {{ health_check_time }}"
+          - ""
+          - "Components Checked:"
+          - "  - Docker Swarm cluster status"
+          - "  - All node health and availability"
+          - "  - Stack and service replicas"
+          - "  - Disk and memory usage"
+          - "  - Node exporters (all nodes)"
+          - "  - cAdvisor (all nodes)"
+          - "  - Prometheus health and targets"
+          - "  - Grafana availability"
+          - "  - Jenkins (if deployed)"
+          - ""
+          - "Review output above for any warnings or failures"
+          - "========================================="

@@ -1,0 +1,208 @@
+---
+# Production Backup Playbook
+# Backs up critical data from Docker Swarm cluster
+# Run schedule: Daily at 2 AM UTC
+
+- name: Backup Docker Swarm Data
+  hosts: swarm_manager
+  become: true
+  gather_facts: true
+
+  vars:
+    backup_dir: "/var/backups/swarm"
+    backup_retention_days: 30
+    timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+
+  tasks:
+    - name: Create backup directory structure
+      ansible.builtin.file:
+        path: "{{ backup_dir }}/{{ timestamp }}"
+        state: directory
+        mode: '0750'
+        owner: root
+        group: root
+
+    - name: Backup Swarm node configuration
+      ansible.builtin.command: docker node inspect --pretty {{ item }}
+      loop: "{{ groups['all'] }}"
+      register: node_configs
+      changed_when: false
+
+    - name: Save node configurations
+      ansible.builtin.copy:
+        content: "{{ item.stdout }}"
+        dest: "{{ backup_dir }}/{{ timestamp }}/node_{{ item.item }}.txt"
+        mode: '0640'
+      loop: "{{ node_configs.results }}"
+      no_log: false
+
+    - name: Backup Docker stack definitions
+      ansible.builtin.shell: |
+        docker stack ls --format "{{ '{{' }}.Name{{ '}}' }}" | \
+        while read stack; do
+          docker stack ps $stack > {{ backup_dir }}/{{ timestamp }}/stack_${stack}_tasks.txt
+          docker stack services $stack > {{ backup_dir }}/{{ timestamp }}/stack_${stack}_services.txt
+        done
+      changed_when: false
+      failed_when: false
+
+    - name: Backup Docker secrets list
+      ansible.builtin.command: docker secret ls
+      register: secrets_list
+      changed_when: false
+
+    - name: Save secrets list
+      ansible.builtin.copy:
+        content: "{{ secrets_list.stdout }}"
+        dest: "{{ backup_dir }}/{{ timestamp }}/secrets_list.txt"
+        mode: '0640'
+
+    - name: Backup Docker configs list
+      ansible.builtin.command: docker config ls
+      register: configs_list
+      changed_when: false
+
+    - name: Save configs list
+      ansible.builtin.copy:
+        content: "{{ configs_list.stdout }}"
+        dest: "{{ backup_dir }}/{{ timestamp }}/configs_list.txt"
+        mode: '0640'
+
+- name: Backup Monitoring Server Data
+  hosts: monitoring
+  become: true
+  gather_facts: true
+
+  vars:
+    backup_dir: "/var/backups/monitoring"
+    timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+
+  tasks:
+    - name: Create monitoring backup directory
+      ansible.builtin.file:
+        path: "{{ backup_dir }}/{{ timestamp }}"
+        state: directory
+        mode: '0750'
+
+    - name: Stop monitoring services
+      ansible.builtin.command:
+        cmd: docker compose stop
+        chdir: /opt/monitoring
+      failed_when: false
+      changed_when: true
+
+    - name: Backup Prometheus data
+      ansible.builtin.archive:
+        path: /var/lib/docker/volumes/monitoring_prometheus_data
+        dest: "{{ backup_dir }}/{{ timestamp }}/prometheus_data.tar.gz"
+        format: gz
+      when: true
+
+    - name: Backup Grafana data
+      ansible.builtin.archive:
+        path: /var/lib/docker/volumes/monitoring_grafana_data
+        dest: "{{ backup_dir }}/{{ timestamp }}/grafana_data.tar.gz"
+        format: gz
+      when: true
+
+    - name: Backup monitoring configs
+      ansible.builtin.copy:
+        src: /opt/monitoring/
+        dest: "{{ backup_dir }}/{{ timestamp }}/configs/"
+        remote_src: true
+        mode: preserve
+
+    - name: Start monitoring services
+      ansible.builtin.command:
+        cmd: docker compose start
+        chdir: /opt/monitoring
+      failed_when: false
+      changed_when: true
+
+- name: Backup Jenkins Data
+  hosts: swarm_manager
+  become: true
+  gather_facts: true
+
+  vars:
+    backup_dir: "/var/backups/jenkins"
+    timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+
+  tasks:
+    - name: Check if Jenkins volume exists
+      ansible.builtin.command: docker volume inspect jenkins_jenkins_data
+      register: jenkins_volume_check
+      failed_when: false
+      changed_when: false
+
+    - name: Create Jenkins backup directory
+      ansible.builtin.file:
+        path: "{{ backup_dir }}/{{ timestamp }}"
+        state: directory
+        mode: '0750'
+      when: jenkins_volume_check.rc == 0
+
+    - name: Backup Jenkins data volume
+      ansible.builtin.shell: |
+        docker run --rm \
+          -v jenkins_jenkins_data:/data \
+          -v {{ backup_dir }}/{{ timestamp }}:/backup \
+          alpine tar czf /backup/jenkins_data.tar.gz -C /data .
+      when: jenkins_volume_check.rc == 0
+      changed_when: true
+
+- name: Cleanup Old Backups
+  hosts: swarm_manager:monitoring
+  become: true
+  gather_facts: false
+
+  vars:
+    backup_retention_days: 30
+
+  tasks:
+    - name: Remove backups older than retention period
+      ansible.builtin.find:
+        paths:
+          - /var/backups/swarm
+          - /var/backups/monitoring
+          - /var/backups/jenkins
+        age: "{{ backup_retention_days }}d"
+        recurse: yes
+      register: old_backups
+
+    - name: Delete old backup directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ old_backups.files }}"
+      when: old_backups.matched > 0
+
+- name: Generate Backup Report
+  hosts: swarm_manager
+  become: true
+  gather_facts: true
+
+  vars:
+    backup_dir: "/var/backups"
+    timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+
+  tasks:
+    - name: Get backup sizes
+      ansible.builtin.shell: |
+        du -sh {{ backup_dir }}/*/{{ timestamp }} 2>/dev/null || echo "No backups found"
+      register: backup_sizes
+      changed_when: false
+
+    - name: Display backup summary
+      ansible.builtin.debug:
+        msg:
+          - "========================================="
+          - "   Backup Completed Successfully"
+          - "========================================="
+          - "Timestamp: {{ timestamp }}"
+          - "Backup Sizes:"
+          - "{{ backup_sizes.stdout_lines }}"
+          - ""
+          - "Retention: {{ backup_retention_days }} days"
+          - "Location: {{ backup_dir }}"
+          - "========================================="

@@ -232,3 +232,25 @@ override.tf.json
 *.pem
 .deploy_vars
 swarm-key.pem
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Backup files
+*.bak
+*.backup
+*.old
+*.orig
+*~
+
+# Archive directories
+archive/
+archives/
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
