@@ -178,8 +178,16 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Terraform Init
-        run: terraform init
+      - name: Setup Terraform Backend (Idempotent)
+        run: |
+          echo "🚀 Setting up Terraform backend infrastructure..."
+          chmod +x setup-backend.sh
+          ./setup-backend.sh || echo "⚠️  Backend setup had warnings (may already exist)"
+
+      - name: Terraform Init with Backend
+        run: |
+          echo "🔧 Initializing Terraform with remote backend..."
+          terraform init -reconfigure
 
       - name: Terraform Plan
         id: plan
