@@ -14,10 +14,16 @@
 # Re-check status after leave if needed
 - name: Re-check Swarm status after force leave
   ansible.builtin.shell: docker info --format '{{"{{"}}.Swarm.LocalNodeState{{"}}"}}'
-  register: swarm_status
+  register: swarm_status_recheck
   changed_when: false
   failed_when: false
   when: swarm_status.stdout == 'error'
+
+# Update swarm_status if recheck ran
+- name: Update swarm_status if recheck was performed
+  set_fact:
+    swarm_status: "{{ swarm_status_recheck }}"
+  when: swarm_status_recheck is not skipped
 
 # Initialize Swarm on the first manager if not active
 - name: Initialize Docker Swarm on manager
