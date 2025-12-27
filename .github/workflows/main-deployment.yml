@@ -40,11 +40,12 @@ env:
   ANSIBLE_FORCE_COLOR: 'true'
   TF_VERSION: '1.6.0'
   ANSIBLE_VERSION: '8.0.0'  # Ansible 8.x includes ansible-core 2.15
-  AWS_REGION: ${{ secrets.AWS_REGION }} 
+  AWS_REGION: ${{ secrets.AWS_REGION }}
   PYTHON_VERSION: '3.14'
   AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
   AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
   SWARM_STACK: levelop-wp
+  MON_STACK: monitoring
 
 jobs:
   # Stage 1: Run all validations and tests
