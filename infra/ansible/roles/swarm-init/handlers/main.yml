@@ -1,0 +1,8 @@
+---
+# Handlers for swarm-init role
+
+- name: restart docker for swarm
+  systemd:
+    name: docker
+    state: restarted
+    daemon_reload: yes

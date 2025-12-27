@@ -1,0 +1,28 @@
+---
+# Role metadata for swarm-init
+
+galaxy_info:
+  role_name: swarm_init
+  author: DevOps Team
+  description: Initialize and configure Docker Swarm cluster
+  company: WordPress Swarm Project
+
+  license: MIT
+
+  min_ansible_version: "2.15"
+
+  platforms:
+    - name: Ubuntu
+      versions:
+        - jammy  # 22.04 LTS
+        - focal  # 20.04 LTS
+
+  galaxy_tags:
+    - docker
+    - swarm
+    - cluster
+    - orchestration
+    - container
+
+dependencies:
+  - role: docker-engine

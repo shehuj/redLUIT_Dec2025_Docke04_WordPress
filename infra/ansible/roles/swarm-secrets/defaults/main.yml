@@ -1,0 +1,18 @@
+---
+# Default variables for swarm-secrets role
+
+# Secrets to create in Docker Swarm
+# These should be overridden in inventory or playbook with actual secret values
+
+swarm_secrets:
+  - name: mysql_root_password
+    value: "{{ lookup('env', 'MYSQL_ROOT_PASSWORD') | default('changeme_root', true) }}"
+
+  - name: mysql_password
+    value: "{{ lookup('env', 'MYSQL_PASSWORD') | default('changeme_user', true) }}"
+
+  - name: slack_webhook_url
+    value: "{{ lookup('env', 'SLACK_WEBHOOK_URL') | default('', true) }}"
+
+# Secret creation is idempotent - existing secrets won't be recreated
+swarm_secrets_force_recreate: false

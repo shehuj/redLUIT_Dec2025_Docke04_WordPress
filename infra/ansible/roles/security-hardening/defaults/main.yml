@@ -1,0 +1,36 @@
+---
+# Default variables for security-hardening role
+
+# UFW Firewall configuration
+ufw_enabled: true
+ufw_default_incoming_policy: deny
+ufw_default_outgoing_policy: allow
+
+# Allowed SSH ports
+ssh_port: 22
+allowed_ssh_sources: []  # Empty means allow from anywhere (set in inventory)
+
+# Docker Swarm ports
+swarm_management_port: 2377
+swarm_node_communication_port: 7946
+swarm_overlay_network_port: 4789
+
+# Additional ports to allow
+additional_allowed_ports:
+  - 80    # HTTP
+  - 443   # HTTPS
+  - 3000  # Grafana
+  - 9090  # Prometheus
+  - 9093  # AlertManager
+
+# Fail2ban configuration
+fail2ban_enabled: true
+fail2ban_bantime: 3600
+fail2ban_maxretry: 5
+
+# Automatic security updates
+unattended_upgrades_enabled: true
+
+# Disable root login
+ssh_permit_root_login: "no"
+ssh_password_authentication: "no"

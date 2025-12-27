@@ -1,0 +1,36 @@
+# Ansible Lint Configuration
+
+# Exclude paths
+exclude_paths:
+  - .git/
+  - .github/
+  - inventory/hosts.ini  # Generated file
+  - .pytest_cache/
+  - __pycache__/
+
+# Enable specific rules
+enable_list:
+  - yaml
+
+# Skip specific rules
+skip_list:
+  - role-name  # Allow any role names
+  - no-changed-when  # Allow commands without changed_when
+  - command-instead-of-shell  # Sometimes shell is needed
+  - risky-file-permissions  # We set explicit permissions
+
+# Warn on these instead of error
+warn_list:
+  - experimental
+  - ignore-errors
+  - no-handler
+  - unnamed-task
+
+# Use default rules for everything else
+use_default_rules: true
+
+# Exclude certain tags
+tags: {}
+
+# Verbosity
+verbosity: 1

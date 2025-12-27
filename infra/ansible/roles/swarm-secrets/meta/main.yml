@@ -1,0 +1,28 @@
+---
+# Role metadata for swarm-secrets
+
+galaxy_info:
+  role_name: swarm_secrets
+  author: DevOps Team
+  description: Manage Docker Swarm secrets for WordPress application
+  company: WordPress Swarm Project
+
+  license: MIT
+
+  min_ansible_version: "2.15"
+
+  platforms:
+    - name: Ubuntu
+      versions:
+        - jammy  # 22.04 LTS
+        - focal  # 20.04 LTS
+
+  galaxy_tags:
+    - docker
+    - swarm
+    - secrets
+    - security
+    - wordpress
+
+dependencies:
+  - role: swarm-init

@@ -1,0 +1,5 @@
+---
+# Handlers for swarm-secrets role
+
+# No handlers needed for this role
+# Secrets are created idempotently
