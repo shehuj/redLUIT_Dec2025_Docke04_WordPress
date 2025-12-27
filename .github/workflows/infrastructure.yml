@@ -120,7 +120,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.14'
 
       - name: Install dependencies
         run: |
@@ -255,7 +255,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.14'
 
       - name: Install Ansible
         run: |
@@ -271,7 +271,7 @@ jobs:
 
       - name: Wait for instances to be ready
         run: |
-          sleep 60  # Allow instances to fully boot
+          sleep 180  # Allow instances to fully boot
 
       - name: Run Ansible playbook (Idempotent)
         working-directory: infra/ansible
