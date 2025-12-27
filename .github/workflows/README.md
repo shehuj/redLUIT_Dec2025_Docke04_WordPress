@@ -1,114 +1,256 @@
 # GitHub Actions Workflows Documentation
 
-This directory contains all GitHub Actions workflows for the WordPress on Docker Swarm project. The workflow system is designed to be **idempotent**, **comprehensive**, and **production-ready**.
+This directory contains all GitHub Actions workflows for the WordPress on Docker Swarm project. The workflow system implements a **fully automated, two-stage CI/CD pipeline** that separates infrastructure provisioning from application deployment for safety, cost efficiency, and clarity.
 
 ## Workflow Architecture
 
-### Primary Workflows (Recommended)
+### Two-Stage Pipeline Overview
 
-#### 1. `pr-validation.yml` - Pull Request Validation
-**Trigger:** Pull requests to `dev` branch
-**Purpose:** Comprehensive validation of all changes before merging
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    CI/CD Pipeline Flow                       │
+└─────────────────────────────────────────────────────────────┘
+
+PR to 'dev' Branch                    Merge to 'main' Branch
+       │                                       │
+       ▼                                       ▼
+┌──────────────────┐                  ┌──────────────────┐
+│  Validate Code   │                  │ Check Infra      │
+│  - Tests         │                  │ Exists           │
+│  - Terraform fmt │                  │                  │
+│  - Ansible syntax│                  └─────────┬────────┘
+└────────┬─────────┘                            │
+         │                                      ▼
+         ▼                            ┌──────────────────┐
+┌──────────────────┐                  │ Deploy           │
+│ Provision Infra  │                  │ Monitoring Stack │
+│ - Terraform      │                  │                  │
+│ - Generate keys  │                  └─────────┬────────┘
+└────────┬─────────┘                            │
+         │                                      ▼
+         ▼                            ┌──────────────────┐
+┌──────────────────┐                  │ Deploy           │
+│ Configure Swarm  │                  │ WordPress Stack  │
+│ - Ansible        │                  │                  │
+│ - Join workers   │                  └─────────┬────────┘
+└────────┬─────────┘                            │
+         │                                      ▼
+         ▼                            ┌──────────────────┐
+┌──────────────────┐                  │ Health Check     │
+│ Comment PR       │                  │ & Rollback       │
+│ ✅ Ready         │                  └──────────────────┘
+└──────────────────┘
+
+PR Closed
+    │
+    ▼
+┌──────────────────┐
+│ Cleanup Infra    │
+│ - Destroy all    │
+│ - Stop costs     │
+└──────────────────┘
+```
+
+## Primary Workflows
+
+### 1. `pr-dev-provision.yml` - Infrastructure Provisioning
+
+**Trigger:** Pull request to `dev` branch (opened, synchronize, reopened)
+
+**Purpose:** Provision AWS infrastructure and configure Docker Swarm cluster
+
+**Duration:** 10-15 minutes
 
 **What it does:**
-- ✅ Python linting and testing (flake8, pytest)
-- ✅ Compliance checks (file structure, configurations)
-- ✅ Terraform validation and planning
-- ✅ Ansible syntax checking and linting
-- ✅ Docker stack validation
-- ✅ Summary report of all validations
+1. **Validate** (1-2 min)
+   - Run pytest tests
+   - Check Terraform formatting
+   - Validate Ansible syntax
+   - Ensure code quality
 
-**Manual trigger:** Available via workflow_dispatch
+2. **Provision Infrastructure** (5-7 min)
+   - Setup Terraform backend (S3 + DynamoDB)
+   - Run `terraform apply` to create:
+     - VPC with public subnets
+     - 1 Manager + 2 Worker EC2 instances
+     - Security groups
+     - Auto-generate .pem SSH keys
+   - Upload SSH key as artifact
 
-**Idempotency:** All checks are read-only and idempotent
+3. **Configure Swarm** (3-5 min)
+   - Wait for instances to boot
+   - Run Ansible playbook:
+     - Install Docker
+     - Configure UFW firewall
+     - Setup SSH hardening
+     - Initialize Swarm on manager
+     - Join workers to Swarm
+   - Verify cluster health
 
----
+4. **PR Comments**
+   - ✅ Success: Manager IP, SSH instructions, next steps
+   - ❌ Failure: Error details, troubleshooting steps
 
-#### 2. `main-deployment.yml` - Main Deployment Pipeline
-**Trigger:** Merge to `main` branch
-**Purpose:** Complete deployment pipeline with validations → infrastructure → deployment
+**Outputs:**
+- Infrastructure ready for stack deployment
+- SSH key available as artifact (7-day retention)
+- Manager/Worker IPs saved
+- Swarm cluster operational
 
-**Pipeline stages:**
-1. **Validations** (Stage 1)
-   - Run all tests and compliance checks
-   - Validate Docker stack configurations
+**Manual trigger:** Available via `workflow_dispatch` with `force_recreate` option
 
-2. **Infrastructure** (Stage 2)
-   - Validate Terraform and Ansible configurations
-   - Provision infrastructure (only if changes detected)
-   - Configure Swarm cluster (only if infrastructure changed)
-
-3. **Deployment** (Stage 3)
-   - Build and push Docker images
-   - Deploy monitoring stack
-   - Deploy application stack
-   - Verify deployment
-
-**Manual trigger options:**
-- `skip_tests` - Skip validation stage (not recommended)
-- `skip_infra` - Skip infrastructure provisioning
-- `infra_action` - Choose plan/apply/skip for infrastructure
-
-**Idempotency features:**
-- Terraform only applies when changes detected
-- Ansible runs are idempotent by design
-- Docker secrets only created if they don't exist
-- Docker stack deploy updates existing services
+**Idempotency:** Safe to re-run; Terraform detects changes, Ansible is idempotent
 
 ---
 
-### Standalone Workflows (For specific operations)
+### 2. `main-deploy-stacks.yml` - Application Stack Deployment
 
-#### 3. `infrastructure.yml` - Infrastructure Provisioning (Standalone)
 **Trigger:**
-- PRs to `dev` (validation only)
-- Manual workflow_dispatch
+- Push to `main` branch
+- Changes to `stack-app/**` or `stack-monitoring/**`
 
-**Purpose:** Standalone infrastructure operations for testing or manual provisioning
+**Purpose:** Deploy application stacks to existing infrastructure
 
-**Manual trigger options:**
-- `action` - plan/apply/destroy
-- `environment` - production/staging/development
+**Duration:** 5-8 minutes
 
-**When to use:**
-- Testing infrastructure changes
-- Manual infrastructure provisioning
-- Emergency infrastructure operations
+**Prerequisites:** Infrastructure must exist (provisioned via PR to dev)
 
-**Note:** For production deployments, use `main-deployment.yml` instead
+**What it does:**
+1. **Pre-flight Checks** (30 sec)
+   - Verify infrastructure exists
+   - Get manager IP from Terraform state
+   - Retrieve SSH key
+   - **Fails if no infrastructure found**
+
+2. **Validate Stacks** (15 sec)
+   - Check YAML syntax
+   - Verify required secrets configured
+
+3. **Deploy Monitoring** (2-3 min)
+   - Copy stack files to manager
+   - Create Slack webhook secret
+   - Deploy monitoring stack:
+     - Prometheus
+     - Grafana
+     - AlertManager
+     - cAdvisor (global)
+     - Node Exporter (global)
+   - Verify services are running
+
+4. **Deploy Application** (3-5 min)
+   - Copy stack files to manager
+   - Create database secrets
+   - Deploy WordPress stack:
+     - MySQL database (1 replica)
+     - WordPress (3 replicas)
+   - Verify services are running
+
+5. **Health Check & Rollback** (1 min)
+   - Check all services are healthy
+   - If any service fails:
+     - Automatically rollback failed services
+     - Report error
+   - Generate deployment summary
+
+**Outputs:**
+- WordPress URL: `http://<manager_ip>`
+- Grafana URL: `http://<manager_ip>:3000` (admin/admin)
+- Prometheus URL: `http://<manager_ip>:9090`
+- Service health status
+
+**Manual trigger:** Available via `workflow_dispatch` with options:
+- `deploy_monitoring` - Deploy monitoring stack (default: true)
+- `deploy_app` - Deploy application stack (default: true)
+
+**Idempotency:** Docker stack deploy updates existing services, secrets only created if missing
 
 ---
 
-#### 4. `deploy.yml` - Swarm Deploy + Monitoring (Standalone)
-**Trigger:** Manual workflow_dispatch only
+### 3. `pr-dev-cleanup.yml` - Infrastructure Cleanup
 
-**Purpose:** Standalone deployment for testing or hotfixes
+**Trigger:**
+- PR to `dev` closed
+- Manual `workflow_dispatch`
 
-**Manual trigger options:**
-- `force_rebuild` - Force rebuild and push Docker images
-- `stack_to_deploy` - both/app/monitoring
+**Purpose:** Automatically teardown infrastructure to save costs
 
-**When to use:**
-- Testing deployments
-- Deploying only monitoring stack
-- Hotfix deployments
-- Rollback scenarios
+**Duration:** 3-5 minutes
 
-**Note:** For production deployments, use `main-deployment.yml` instead
+**What it does:**
+1. **Confirm Cleanup**
+   - Auto-confirm if PR closed
+   - Require "DESTROY" input if manual
+
+2. **Destroy Infrastructure** (3-5 min)
+   - Run `terraform destroy`
+   - Remove all AWS resources:
+     - EC2 instances
+     - VPC and subnets
+     - Security groups
+     - SSH key pairs
+   - Verify complete destruction
+
+3. **Comment PR**
+   - ✅ Resources destroyed
+   - 💰 Costs stopped
+   - State preserved in S3
+
+**Manual trigger:** Type `DESTROY` to confirm
+
+**Cost Impact:**
+- Stops ~$110/month infrastructure costs
+- Terraform state preserved for audit
 
 ---
 
-### Legacy Workflows (Backwards compatibility)
+### 4. `pr-validation.yml` - PR Validation (All Branches)
 
-#### 5. `python.yml` - Python Tests (Legacy)
-**Status:** Deprecated - use `pr-validation.yml` instead
-**Trigger:** PRs to `dev` (limited paths), manual
+**Trigger:** Pull request to any branch
 
-#### 6. `compliance.yml` - Compliance Checks (Legacy)
-**Status:** Deprecated - use `pr-validation.yml` instead
-**Trigger:** PRs to `dev` (limited paths), manual
+**Purpose:** Quick validation of code changes without provisioning
+
+**Duration:** 2-3 minutes
+
+**What it does:**
+- Python linting and testing
+- Terraform format check
+- Ansible syntax validation
+- Repository structure checks
+
+**Use case:** Validates PRs to branches other than dev (e.g., feature → feature merges)
 
 ---
+
+### 5. `infrastructure.yml` - Manual Infrastructure Operations
+
+**Trigger:** Manual `workflow_dispatch` only
+
+**Purpose:** Standalone infrastructure operations for manual control
+
+**Use cases:**
+- Manual infrastructure testing
+- Emergency infrastructure changes
+- One-off provisioning
+
+**Note:** For normal deployments, use the PR-based workflow instead
+
+---
+
+## Required GitHub Secrets
+
+Configure these in your GitHub repository (Settings → Secrets → Actions):
+
+### AWS Credentials
+- `AWS_ACCESS_KEY_ID` - AWS access key
+- `AWS_SECRET_ACCESS_KEY` - AWS secret key
+- `AWS_REGION` - AWS region (e.g., us-east-1)
+
+### Application Secrets
+- `MYSQL_ROOT_PASSWORD` - MySQL root password
+- `MYSQL_PASSWORD` - WordPress database password
+- `SLACK_WEBHOOK_URL` - Slack webhook for AlertManager (optional)
+
+**Note:** SSH keys are automatically generated by Terraform. No need to provide SSH_PUBLIC_KEY or SSH_PRIVATE_KEY!
 
 ## Workflow Decision Tree
 
@@ -120,200 +262,228 @@ This directory contains all GitHub Actions workflows for the WordPress on Docker
     ┌────────────┴────────────┐
     │                         │
     v                         v
-┌─────────┐            ┌──────────┐
-│ PR to   │            │ Deploy   │
-│ dev     │            │ to prod  │
-└─────────┘            └──────────┘
+┌─────────────┐       ┌─────────────┐
+│ Provision   │       │ Deploy      │
+│ Infra       │       │ Stacks      │
+└─────────────┘       └─────────────┘
     │                         │
     v                         v
-pr-validation.yml    main-deployment.yml
+Create PR to dev        Merge to main
     │                         │
-    ├─ Python tests          ├─ Run validations
-    ├─ Compliance            ├─ Provision infra
-    ├─ Terraform             ├─ Deploy stacks
-    ├─ Ansible               └─ Verify
-    └─ Docker
+pr-dev-provision.yml   main-deploy-stacks.yml
+    │                         │
+    ├─ Validate              ├─ Preflight check
+    ├─ Provision             ├─ Deploy monitoring
+    ├─ Configure Swarm       ├─ Deploy WordPress
+    └─ Comment PR            └─ Health check
 
 
 ┌──────────────────────────────┐
-│ Manual/Testing operations    │
+│ Done testing?                 │
 └──────────────────────────────┘
          │
-    ┌────┴─────┐
-    │          │
-    v          v
-infrastructure.yml  deploy.yml
-    │                  │
-    └─ Infra only     └─ Deploy only
+         v
+   Close dev PR
+         │
+         v
+pr-dev-cleanup.yml
+         │
+         └─ Destroy all → Stop costs
+```
+
+## Development Workflow
+
+### Standard Development Flow
+
+```bash
+# 1. Create feature branch
+git checkout -b feature/my-feature
+
+# 2. Make changes
+# Edit files...
+
+# 3. Create PR to dev
+git push origin feature/my-feature
+# Create PR: feature/my-feature → dev
+
+# 4. Wait for infrastructure provisioning (10-15 min)
+# ✅ pr-dev-provision.yml runs automatically
+# ✅ PR comment with manager IP and SSH instructions
+
+# 5. Test changes (optional)
+# Download SSH key from workflow artifacts
+ssh -i swarm-key.pem ubuntu@<manager_ip>
+
+# 6. Merge to main to deploy stacks
+# Create PR: dev → main
+# ✅ main-deploy-stacks.yml runs automatically
+# ✅ Monitoring + WordPress deployed
+
+# 7. Verify deployment
+# WordPress: http://<manager_ip>
+# Grafana: http://<manager_ip>:3000
+
+# 8. Close dev PR when done
+# ✅ pr-dev-cleanup.yml runs automatically
+# 💰 Infrastructure destroyed, costs stopped
+```
+
+### Quick Deployment (Main Only)
+
+If infrastructure already exists from a previous PR:
+
+```bash
+# Just push to main
+git checkout main
+git merge dev
+git push origin main
+
+# ✅ Stacks deploy to existing infrastructure
 ```
 
 ## Idempotency Guarantees
 
-All workflows are designed to be **idempotent** - they can be run multiple times with the same result.
+All workflows are designed to be **idempotent** - safe to run multiple times.
 
 ### Terraform Idempotency
-```yaml
-# Uses -detailed-exitcode to detect changes
-terraform plan -detailed-exitcode
-# Only applies if changes detected
-if changes_detected; then terraform apply; fi
-```
+- Uses `-detailed-exitcode` to detect changes
+- Only applies when changes detected
+- Safe to re-run provisioning workflow
 
 ### Ansible Idempotency
-- All Ansible playbooks use idempotent modules
-- Ansible naturally handles "already configured" states
-- Safe to run multiple times
+- All playbooks use idempotent modules
+- Checks current state before making changes
+- Safe to re-run configuration
 
 ### Docker Secrets Idempotency
 ```bash
 # Only create if doesn't exist
-docker secret ls | grep -q secret_name || \
-  echo "$SECRET" | docker secret create secret_name -
+docker secret ls | grep -q mysql_password || \
+  echo "$PASSWORD" | docker secret create mysql_password -
 ```
 
 ### Docker Stack Deployment Idempotency
-```bash
-# Updates existing services, creates new ones
-docker stack deploy -c stack.yml stack_name
-```
+- `docker stack deploy` updates existing services
+- Doesn't recreate services unnecessarily
+- Safe to re-deploy stacks
 
-## Environment Variables
+## Error Handling
 
-Required secrets in GitHub repository settings:
+### Automatic Retry Logic
 
-### AWS Credentials
-- `AWS_ACCESS_KEY_ID` - AWS access key
-- `AWS_SECRET_ACCESS_KEY` - AWS secret key
-- `AWS_REGION` - Target AWS region
+**Infrastructure Provisioning:**
+- SSH connection retry (2 attempts, 30s delay)
+- Ansible playbook retry on failure
+- Swarm join retry (6 attempts, 10s delay)
 
-### SSH Keys
-- `SSH_PUBLIC_KEY` - Public SSH key for EC2 instances
-- `SSH_PRIVATE_KEY` - Private SSH key for accessing instances
-- `SSH_USERNAME` - SSH username (default: ubuntu)
+**Stack Deployment:**
+- Service health check retry (12-18 attempts, 10s delay)
+- Automatic rollback on service failure
 
-### Application Secrets
-- `MYSQL_ROOT_PASSWORD` - MySQL root password
-- `MYSQL_PASSWORD` - MySQL application password
-- `SLACK_WEBHOOK_URL` - Slack webhook for alerts
+### Graceful Failures
 
-### Docker Registry
-- `DOCKERHUB_USERNAME` - DockerHub username
-- `DOCKERHUB_TOKEN` - DockerHub access token
+**Infrastructure Stage:**
+- ❌ Terraform validation fails → Stop, report error
+- ❌ Terraform apply fails → Stop, preserve state
+- ❌ Ansible fails → Retry once, then fail
+- ❌ Swarm join fails → Reset error state, retry
 
-### Swarm Manager
-- `SWARM_MANAGER_HOST` - IP/hostname of Swarm manager (set after infra provisioning)
+**Deployment Stage:**
+- ❌ Stack validation fails → Stop, report error
+- ❌ Service fails to start → Rollback to previous version
+- ❌ Health check fails → Report, attempt rollback
 
-## Workflow Best Practices
+## Cost Management
 
-### For Development
+### Active Infrastructure Costs
+- **During PR Review:** ~$110/month (prorated)
+- **PR Open 1 day:** ~$3.67
+- **PR Open 1 week:** ~$25.67
 
-1. **Create feature branch from dev**
-   ```bash
-   git checkout dev
-   git pull origin dev
-   git checkout -b feature/my-feature
-   ```
-
-2. **Make changes and commit**
-   ```bash
-   git add .
-   git commit -m "Add new feature"
-   git push origin feature/my-feature
-   ```
-
-3. **Create PR to dev**
-   - `pr-validation.yml` runs automatically
-   - All checks must pass before merge
-
-4. **Merge to dev**
-   - Squash and merge recommended
-   - No automatic deployments on dev merge
-
-### For Production Deployment
-
-1. **Create PR from dev to main**
-   ```bash
-   git checkout main
-   git pull origin main
-   git merge dev
-   git push origin main
-   ```
-
-2. **Merge to main triggers full pipeline**
-   - `main-deployment.yml` runs automatically
-   - Stages: Validations → Infrastructure → Deployment
-   - Infrastructure only provisioned if changes detected
-   - Deployment happens every time
-
-### For Manual Operations
-
-#### Infrastructure Changes Only
-```
-GitHub Actions → infrastructure.yml → Run workflow
-- Choose action: apply
-- Choose environment: production
-```
-
-#### Deployment Only
-```
-GitHub Actions → deploy.yml → Run workflow
-- Choose stack: both/app/monitoring
-- Force rebuild: yes/no
-```
-
-#### Full Pipeline with Custom Options
-```
-GitHub Actions → main-deployment.yml → Run workflow
-- Configure skip options
-- Set infrastructure action
-```
+### Automatic Cost Control
+- ✅ Infrastructure destroyed when PR closes
+- ✅ No lingering resources
+- ✅ State preserved in S3 for audit
 
 ## Troubleshooting
 
 ### Validation Failures
-- Check `pr-validation.yml` job logs
-- Fix issues locally and push again
-- Re-run failed jobs if needed
+```bash
+# Check workflow logs in GitHub Actions
+# Fix issues locally and push again
+# Validations run on every push to PR
+```
 
 ### Infrastructure Provisioning Failures
-- Verify AWS credentials are correct
-- Check AWS service quotas
-- Review Terraform state
-- Use `terraform plan` locally first
+```bash
+# 1. Verify AWS credentials in secrets
+# 2. Check AWS service quotas
+# 3. Review Terraform state in S3
+# 4. Check workflow logs for specific errors
+# 5. Re-run workflow or push new commit
+```
 
 ### Deployment Failures
-- Verify SWARM_MANAGER_HOST is correct
-- Check SSH connectivity
-- Verify Docker secrets exist
-- Review Docker service logs on manager
+```bash
+# 1. Verify infrastructure exists (PR to dev must be open)
+# 2. Check manager IP is accessible
+# 3. Download SSH key from artifacts
+# 4. Manually check services:
+ssh -i swarm-key.pem ubuntu@<manager_ip>
+docker service ls
+docker service logs <service_name>
+```
 
-### Idempotency Issues
-If a workflow isn't idempotent:
-1. Check the specific job that's causing issues
-2. Review the condition logic in the workflow
-3. Verify Terraform state is correct
-4. Ensure Docker secrets aren't being recreated
+### Cleanup Issues
+```bash
+# If automatic cleanup fails:
+# 1. Manually trigger pr-dev-cleanup.yml
+# 2. Type "DESTROY" to confirm
+# 3. Or manually destroy:
+cd infra/terraform
+terraform destroy
+```
 
 ## Monitoring Workflow Runs
 
-1. **GitHub Actions tab** - View all workflow runs
-2. **Pull Request checks** - See validation status
-3. **Job summaries** - Review deployment details
-4. **Artifacts** - Download Ansible inventory, logs, etc.
+1. **GitHub Actions Tab** - View all workflow runs
+2. **PR Checks** - See status directly in PR
+3. **PR Comments** - Automatic updates on provision/cleanup
+4. **Artifacts** - Download SSH keys (7-day retention)
+5. **Job Summaries** - Detailed deployment reports
 
-## Contributing
+## Best Practices
 
-When modifying workflows:
-1. Test changes in a feature branch
-2. Use `act` or similar tools for local testing
-3. Update this documentation
-4. Ensure idempotency is maintained
-5. Add appropriate status checks
+### For Development
+1. Always create PR to `dev` first for infrastructure changes
+2. Wait for validation to pass before reviewing
+3. Test infrastructure before merging to main
+4. Close PR promptly after testing to stop costs
+
+### For Production
+1. Merge `dev → main` only after thorough testing
+2. Monitor deployment workflow logs
+3. Verify health checks pass
+4. Keep infrastructure PR open if ongoing testing needed
+
+### For Cost Optimization
+1. Close dev PRs when not actively testing
+2. Use manual trigger for one-off tests
+3. Leverage idempotency - re-run failed workflows safely
+4. Monitor AWS costs in CloudWatch
+
+## Documentation
+
+For detailed information, see:
+- [CI/CD Workflow Guide](../../docs/CI_CD_WORKFLOW.md) - Comprehensive pipeline documentation
+- [Infrastructure Guide](../../docs/INFRASTRUCTURE_GUIDE.md) - Infrastructure architecture
+- [Deployment Guide](../../docs/DEPLOYMENT_GUIDE.md) - Deployment procedures
+- [Main README](../../README.md) - Project overview
 
 ## Support
 
 For issues or questions:
-1. Check workflow run logs
+1. Check workflow run logs in GitHub Actions
 2. Review this documentation
-3. Check project README.md
-4. Create an issue with workflow run details
+3. Check [CI/CD Workflow Guide](../../docs/CI_CD_WORKFLOW.md)
+4. Open an issue with workflow details
