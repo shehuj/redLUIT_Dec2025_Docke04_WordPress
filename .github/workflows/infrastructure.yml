@@ -1,21 +1,14 @@
-name: Infrastructure Provisioning
+name: Infrastructure Provisioning (Standalone)
 
 on:
-  # Trigger on PR to dev branch for validation and provisioning
+  # Trigger on PR to dev branch for validation only
   pull_request:
     branches: ["dev"]
     paths:
       - 'infra/**'
       - '.github/workflows/infrastructure.yml'
 
-  # Trigger on merge to main for production deployment
-  push:
-    branches: ["main"]
-    paths:
-      - 'infra/**'
-      - '.github/workflows/infrastructure.yml'
-
-  # Manual trigger for ad-hoc provisioning
+  # Manual trigger for ad-hoc infrastructure operations
   workflow_dispatch:
     inputs:
       action:
@@ -27,11 +20,20 @@ on:
           - plan
           - apply
           - destroy
+      environment:
+        description: 'Target environment'
+        required: false
+        type: choice
+        default: 'production'
+        options:
+          - production
+          - staging
+          - development
 
 env:
   TF_VERSION: '1.6.0'
   ANSIBLE_VERSION: '8.0.0'  # Ansible 8.x includes ansible-core 2.15
-  AWS_REGION: us-east-1
+  AWS_REGION: ${{ secrets.AWS_REGION }}
 
 jobs:
   # Job 1: Validate Terraform configuration
@@ -135,10 +137,10 @@ jobs:
     name: Provision AWS Infrastructure
     needs: [validate-terraform, validate-ansible, compliance-checks]
     runs-on: ubuntu-latest
-    # Run on PR to dev OR push to main
+    # Only run on manual workflow_dispatch with 'apply' action
     if: |
-      (github.event_name == 'pull_request' && github.base_ref == 'dev') ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.action == 'apply'
     defaults:
       run:
         working-directory: infra/terraform
@@ -146,6 +148,7 @@ jobs:
     outputs:
       manager_ip: ${{ steps.terraform_outputs.outputs.manager_ip }}
       worker_ips: ${{ steps.terraform_outputs.outputs.worker_ips }}
+      infra_changed: ${{ steps.check_changes.outputs.changed }}
 
     steps:
       - name: Checkout code
@@ -167,15 +170,39 @@ jobs:
       - name: Terraform Init
         run: terraform init
 
-      - name: Terraform Plan
+      - name: Terraform Plan (Check for changes)
+        id: plan
         env:
           TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
-        run: terraform plan -input=false -out=tfplan
+        run: |
+          terraform plan -input=false -out=tfplan -detailed-exitcode || export TF_EXIT=$?
+          if [ ${TF_EXIT:-0} -eq 2 ]; then
+            echo "changes_detected=true" >> $GITHUB_OUTPUT
+            echo "📝 Infrastructure changes detected"
+          elif [ ${TF_EXIT:-0} -eq 0 ]; then
+            echo "changes_detected=false" >> $GITHUB_OUTPUT
+            echo "✅ Infrastructure is up to date (idempotent)"
+          else
+            echo "❌ Terraform plan failed"
+            exit 1
+          fi
 
-      - name: Terraform Apply
+      - name: Check if infrastructure changes needed
+        id: check_changes
+        run: |
+          if [ "${{ steps.plan.outputs.changes_detected }}" == "true" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Terraform Apply (Idempotent)
+        if: steps.plan.outputs.changes_detected == 'true'
         env:
           TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
-        run: terraform apply -auto-approve tfplan
+        run: |
+          echo "🚀 Applying infrastructure changes..."
+          terraform apply -auto-approve tfplan
 
       - name: Get Terraform Outputs
         id: terraform_outputs
@@ -184,10 +211,12 @@ jobs:
           echo "worker_ips=$(terraform output -json swarm_worker_public_ips | jq -r '. | join(",")')" >> $GITHUB_OUTPUT
 
       - name: Generate Ansible Inventory
+        if: steps.plan.outputs.changes_detected == 'true'
         run: |
           terraform output -raw ansible_inventory > ../../infra/ansible/inventory/hosts.ini
 
       - name: Upload Ansible Inventory
+        if: steps.plan.outputs.changes_detected == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ansible-inventory
@@ -195,15 +224,15 @@ jobs:
           retention-days: 1
 
   # Job 5: Configure Swarm cluster with Ansible
-  # Only runs after provision-infrastructure succeeds
+  # Only runs after provision-infrastructure succeeds and infra changed
   configure-swarm:
     name: Configure Swarm Cluster
     needs: provision-infrastructure
     runs-on: ubuntu-latest
-    # Run on PR to dev OR push to main (same condition as provision)
     if: |
-      (github.event_name == 'pull_request' && github.base_ref == 'dev') ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      always() &&
+      needs.provision-infrastructure.result == 'success' &&
+      needs.provision-infrastructure.outputs.infra_changed == 'true'
 
     steps:
       - name: Checkout code
@@ -236,7 +265,7 @@ jobs:
         run: |
           sleep 60  # Allow instances to fully boot
 
-      - name: Run Ansible playbook
+      - name: Run Ansible playbook (Idempotent)
         working-directory: infra/ansible
         env:
           MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
@@ -244,6 +273,7 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           ANSIBLE_HOST_KEY_CHECKING: False
         run: |
+          echo "🔧 Configuring Swarm cluster (idempotent)..."
           ansible-playbook -i inventory/hosts.ini playbooks/site.yml -v
 
       - name: Verify Swarm cluster
