@@ -32,12 +32,32 @@
   when:
     - inventory_hostname in groups['swarm_workers']
     - swarm_status.stdout != 'active'
+  register: join_result
+  failed_when: false
+  changed_when: join_result.rc == 0
+
+- name: Wait for workers to join (background process may still be completing)
+  pause:
+    seconds: 30
+  when: inventory_hostname in groups['swarm_workers']
+
+- name: Verify worker joined successfully
+  shell: docker info --format '{{"{{"}}.Swarm.LocalNodeState{{"}}"}}'
+  register: final_status
+  until: final_status.stdout == 'active'
+  retries: 6
+  delay: 10
+  when: inventory_hostname in groups['swarm_workers']
+  changed_when: false
 
 - name: Verify Swarm cluster status
   command: docker node ls
   register: node_list
   when: inventory_hostname in groups['swarm_managers']
   changed_when: false
+  retries: 3
+  delay: 10
+  until: node_list.rc == 0
 
 - name: Display Swarm cluster nodes
   debug:
