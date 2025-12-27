@@ -61,6 +61,12 @@
     port: '22'
     proto: tcp
 
+- name: Configure UFW firewall - Allow all traffic from VPC CIDR
+  ufw:
+    rule: allow
+    from_ip: 10.0.0.0/16
+    comment: 'Allow all traffic from VPC for Swarm communication'
+
 - name: Configure UFW firewall - Allow Docker Swarm ports (TCP)
   ufw:
     rule: allow
@@ -101,3 +107,6 @@
 - name: Enable UFW
   ufw:
     state: enabled
+  notify:
+    - reload ufw
+    - restart docker
