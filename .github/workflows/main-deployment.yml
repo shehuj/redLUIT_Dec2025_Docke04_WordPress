@@ -271,8 +271,10 @@ jobs:
       - name: Setup SSH key
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" | tr -d '\r' > ~/.ssh/id_rsa
+          # Use printf to properly preserve newlines in the SSH key
+          printf '%s' "${{ secrets.SSH_PRIVATE_KEY }}" | tr -d '\r' > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
+
           # Add all hosts to known_hosts
           MANAGER_IP="${{ needs.provision-infrastructure.outputs.manager_ip }}"
           WORKER_IPS="${{ needs.provision-infrastructure.outputs.worker_ips }}"
@@ -290,10 +292,15 @@ jobs:
           fi
 
           # Verify key format
-          ssh-keygen -l -f ~/.ssh/id_rsa || {
+          echo "Verifying SSH key format..."
+          if ssh-keygen -l -f ~/.ssh/id_rsa; then
+            echo "✅ SSH key format is valid"
+          else
             echo "❌ SSH key format is invalid"
+            echo "Key file first 2 lines (for debugging):"
+            head -n 2 ~/.ssh/id_rsa
             exit 1
-          }
+          fi
 
       - name: Wait for instances to be ready
         run: |
