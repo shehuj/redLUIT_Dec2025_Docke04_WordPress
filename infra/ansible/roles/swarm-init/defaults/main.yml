@@ -19,5 +19,5 @@ swarm_worker_expected_count: 2
 swarm_join_token_expiry: 24
 
 # Retry settings for joining
-swarm_join_retries: 3
-swarm_join_delay: 10
+swarm_join_retries: 5
+swarm_join_delay: 15
