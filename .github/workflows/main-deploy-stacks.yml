@@ -1,0 +1,420 @@
+name: Main - Deploy Application Stacks
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - 'stack-app/**'
+      - 'stack-monitoring/**'
+      - '.github/workflows/main-deploy-stacks.yml'
+
+  workflow_dispatch:
+    inputs:
+      deploy_monitoring:
+        description: 'Deploy monitoring stack'
+        required: false
+        type: boolean
+        default: true
+      deploy_app:
+        description: 'Deploy application stack'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  SWARM_STACK: levelop-wp
+  MON_STACK: monitoring
+  ANSIBLE_FORCE_COLOR: 'true'
+
+jobs:
+  # Pre-flight checks
+  preflight:
+    name: Pre-flight Checks
+    runs-on: ubuntu-latest
+
+    outputs:
+      infra_exists: ${{ steps.check.outputs.exists }}
+      manager_ip: ${{ steps.get_ip.outputs.manager_ip }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.6.0'
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Check for existing infrastructure
+        id: check
+        working-directory: infra/terraform
+        run: |
+          terraform init -reconfigure
+          if terraform state list | grep -q "aws_instance.swarm_manager"; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "✅ Infrastructure exists"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "❌ No infrastructure found"
+          fi
+
+      - name: Get manager IP
+        id: get_ip
+        if: steps.check.outputs.exists == 'true'
+        working-directory: infra/terraform
+        run: |
+          MANAGER_IP=$(terraform output -raw swarm_manager_public_ip || echo "")
+          echo "manager_ip=$MANAGER_IP" >> $GITHUB_OUTPUT
+          echo "Manager IP: $MANAGER_IP"
+
+          # Save private key
+          terraform output -raw private_key_pem > ../../swarm-key.pem || true
+          chmod 600 ../../swarm-key.pem || true
+
+      - name: Upload SSH Private Key
+        if: steps.check.outputs.exists == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ssh-private-key
+          path: swarm-key.pem
+          retention-days: 1
+
+      - name: Fail if no infrastructure
+        if: steps.check.outputs.exists != 'true'
+        run: |
+          echo "❌ No infrastructure found!"
+          echo ""
+          echo "Please provision infrastructure first by:"
+          echo "1. Creating a PR to 'dev' branch to provision infrastructure"
+          echo "2. Or run the infrastructure workflow manually"
+          exit 1
+
+  # Validate stack configurations
+  validate-stacks:
+    name: Validate Stack Configurations
+    runs-on: ubuntu-latest
+    needs: preflight
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate monitoring stack YAML
+        run: |
+          python3 -c "import yaml; yaml.safe_load(open('stack-monitoring/monitoring-stack.yml'))"
+          echo "✅ Monitoring stack YAML is valid"
+
+      - name: Validate app stack YAML
+        run: |
+          python3 -c "import yaml; yaml.safe_load(open('stack-app/docker-stack.yml'))"
+          echo "✅ App stack YAML is valid"
+
+      - name: Check required secrets configuration
+        run: |
+          if [ -z "${{ secrets.MYSQL_ROOT_PASSWORD }}" ]; then
+            echo "❌ MYSQL_ROOT_PASSWORD secret not set"
+            exit 1
+          fi
+          if [ -z "${{ secrets.MYSQL_PASSWORD }}" ]; then
+            echo "❌ MYSQL_PASSWORD secret not set"
+            exit 1
+          fi
+          echo "✅ All required secrets are configured"
+
+  # Deploy monitoring stack
+  deploy-monitoring:
+    name: Deploy Monitoring Stack
+    needs: [preflight, validate-stacks]
+    runs-on: ubuntu-latest
+    if: |
+      needs.preflight.outputs.infra_exists == 'true' &&
+      (github.event_name == 'push' || inputs.deploy_monitoring)
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download SSH Private Key
+        uses: actions/download-artifact@v4
+        with:
+          name: ssh-private-key
+          path: .
+
+      - name: Setup SSH
+        env:
+          MANAGER_IP: ${{ needs.preflight.outputs.manager_ip }}
+        run: |
+          mkdir -p ~/.ssh
+          mv swarm-key.pem ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H "$MANAGER_IP" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Copy monitoring stack to manager
+        env:
+          MANAGER_IP: ${{ needs.preflight.outputs.manager_ip }}
+        run: |
+          echo "📦 Copying monitoring stack files..."
+          scp -o StrictHostKeyChecking=no -r stack-monitoring ubuntu@${MANAGER_IP}:~/
+
+      - name: Deploy monitoring stack
+        env:
+          MANAGER_IP: ${{ needs.preflight.outputs.manager_ip }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          ssh -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} bash << 'ENDSSH'
+            echo "🚀 Deploying monitoring stack..."
+
+            # Create slack webhook secret if provided
+            if [ -n "${{ secrets.SLACK_WEBHOOK_URL }}" ]; then
+              docker secret ls | grep -q slack_webhook_url || \
+                echo "${{ secrets.SLACK_WEBHOOK_URL }}" | docker secret create slack_webhook_url -
+            fi
+
+            cd ~/stack-monitoring
+            docker stack deploy -c monitoring-stack.yml ${{ env.MON_STACK }}
+
+            echo "✅ Monitoring stack deployed"
+
+            # Wait for services to start
+            sleep 10
+
+            # Check service status
+            docker stack ps ${{ env.MON_STACK }} --no-trunc | head -20
+          ENDSSH
+
+      - name: Verify monitoring services
+        env:
+          MANAGER_IP: ${{ needs.preflight.outputs.manager_ip }}
+        run: |
+          echo "🔍 Verifying monitoring services..."
+          ssh -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} bash << 'ENDSSH'
+            # Wait for services to be running
+            for i in {1..12}; do
+              RUNNING=$(docker service ls --filter "name=${{ env.MON_STACK }}" --format "{{.Replicas}}" | grep -c "1/1" || true)
+              TOTAL=$(docker service ls --filter "name=${{ env.MON_STACK }}" | wc -l)
+              TOTAL=$((TOTAL - 1))  # Subtract header line
+
+              echo "Services running: $RUNNING/$TOTAL"
+
+              if [ "$RUNNING" -eq "$TOTAL" ] && [ "$TOTAL" -gt 0 ]; then
+                echo "✅ All monitoring services are running"
+                exit 0
+              fi
+
+              echo "Waiting for services to start... (attempt $i/12)"
+              sleep 10
+            done
+
+            echo "⚠️ Some services may still be starting"
+            docker service ls --filter "name=${{ env.MON_STACK }}"
+          ENDSSH
+
+  # Deploy application stack
+  deploy-application:
+    name: Deploy WordPress Application
+    needs: [preflight, validate-stacks, deploy-monitoring]
+    runs-on: ubuntu-latest
+    if: |
+      always() &&
+      needs.preflight.outputs.infra_exists == 'true' &&
+      (needs.deploy-monitoring.result == 'success' || needs.deploy-monitoring.result == 'skipped') &&
+      (github.event_name == 'push' || inputs.deploy_app)
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download SSH Private Key
+        uses: actions/download-artifact@v4
+        with:
+          name: ssh-private-key
+          path: .
+
+      - name: Setup SSH
+        env:
+          MANAGER_IP: ${{ needs.preflight.outputs.manager_ip }}
+        run: |
+          mkdir -p ~/.ssh
+          mv swarm-key.pem ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H "$MANAGER_IP" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Copy app stack to manager
+        env:
+          MANAGER_IP: ${{ needs.preflight.outputs.manager_ip }}
+        run: |
+          echo "📦 Copying application stack files..."
+          scp -o StrictHostKeyChecking=no -r stack-app ubuntu@${MANAGER_IP}:~/
+
+      - name: Deploy application stack
+        env:
+          MANAGER_IP: ${{ needs.preflight.outputs.manager_ip }}
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+        run: |
+          ssh -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} bash << 'ENDSSH'
+            echo "🚀 Deploying WordPress application..."
+
+            # Create database secrets
+            docker secret ls | grep -q mysql_root_password || \
+              echo "${{ secrets.MYSQL_ROOT_PASSWORD }}" | docker secret create mysql_root_password -
+
+            docker secret ls | grep -q mysql_password || \
+              echo "${{ secrets.MYSQL_PASSWORD }}" | docker secret create mysql_password -
+
+            cd ~/stack-app
+            docker stack deploy -c docker-stack.yml ${{ env.SWARM_STACK }}
+
+            echo "✅ Application stack deployed"
+
+            # Wait for services to start
+            sleep 15
+
+            # Check service status
+            docker stack ps ${{ env.SWARM_STACK }} --no-trunc | head -20
+          ENDSSH
+
+      - name: Verify application services
+        env:
+          MANAGER_IP: ${{ needs.preflight.outputs.manager_ip }}
+        run: |
+          echo "🔍 Verifying application services..."
+          ssh -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} bash << 'ENDSSH'
+            # Wait for services to be running
+            for i in {1..18}; do
+              RUNNING=$(docker service ls --filter "name=${{ env.SWARM_STACK }}" --format "{{.Replicas}}" | grep -c "/" || true)
+              TOTAL=$(docker service ls --filter "name=${{ env.SWARM_STACK }}" | wc -l)
+              TOTAL=$((TOTAL - 1))  # Subtract header line
+
+              echo "Services: $RUNNING/$TOTAL"
+
+              if [ "$TOTAL" -gt 0 ]; then
+                # Check if MySQL is ready
+                MYSQL_READY=$(docker service ps ${{ env.SWARM_STACK }}_mysql --format "{{.CurrentState}}" | grep -c "Running" || true)
+
+                if [ "$MYSQL_READY" -gt 0 ]; then
+                  echo "✅ Application services are starting/running"
+                  docker service ls --filter "name=${{ env.SWARM_STACK }}"
+                  exit 0
+                fi
+              fi
+
+              echo "Waiting for services to start... (attempt $i/18)"
+              sleep 10
+            done
+
+            echo "⚠️ Services may still be starting"
+            docker service ls --filter "name=${{ env.SWARM_STACK }}"
+          ENDSSH
+
+      - name: Get WordPress URL
+        env:
+          MANAGER_IP: ${{ needs.preflight.outputs.manager_ip }}
+        run: |
+          echo "✅ Deployment complete!"
+          echo ""
+          echo "WordPress URL: http://${MANAGER_IP}"
+          echo "Grafana: http://${MANAGER_IP}:3000 (admin/admin)"
+          echo "Prometheus: http://${MANAGER_IP}:9090"
+
+  # Health check and rollback
+  health-check:
+    name: Health Check & Rollback
+    needs: [preflight, deploy-monitoring, deploy-application]
+    runs-on: ubuntu-latest
+    if: always() && needs.preflight.outputs.infra_exists == 'true'
+
+    steps:
+      - name: Download SSH Private Key
+        uses: actions/download-artifact@v4
+        with:
+          name: ssh-private-key
+          path: .
+
+      - name: Setup SSH
+        env:
+          MANAGER_IP: ${{ needs.preflight.outputs.manager_ip }}
+        run: |
+          mkdir -p ~/.ssh
+          mv swarm-key.pem ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H "$MANAGER_IP" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Run health checks
+        id: health
+        env:
+          MANAGER_IP: ${{ needs.preflight.outputs.manager_ip }}
+        run: |
+          ssh -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} bash << 'ENDSSH'
+            echo "🏥 Running health checks..."
+
+            # Check if any services are failing
+            FAILED=$(docker service ls --format "{{.Name}} {{.Replicas}}" | grep "0/" | wc -l)
+
+            if [ "$FAILED" -gt 0 ]; then
+              echo "❌ $FAILED service(s) are not running:"
+              docker service ls --format "{{.Name}} {{.Replicas}}" | grep "0/"
+              exit 1
+            fi
+
+            echo "✅ All services healthy"
+          ENDSSH
+
+      - name: Rollback on failure
+        if: failure() && steps.health.outcome == 'failure'
+        env:
+          MANAGER_IP: ${{ needs.preflight.outputs.manager_ip }}
+        run: |
+          echo "🔄 Rolling back failed services..."
+          ssh -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} bash << 'ENDSSH'
+            # Rollback each service that failed
+            for service in $(docker service ls --format "{{.Name}} {{.Replicas}}" | grep "0/" | awk '{print $1}'); do
+              echo "Rolling back $service..."
+              docker service rollback $service || true
+            done
+
+            sleep 10
+            docker service ls
+          ENDSSH
+
+  # Deployment summary
+  summary:
+    name: Deployment Summary
+    needs: [preflight, deploy-monitoring, deploy-application, health-check]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Generate summary
+        run: |
+          echo "# Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Results" >> $GITHUB_STEP_SUMMARY
+          echo "- **Infrastructure:** ${{ needs.preflight.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Monitoring Stack:** ${{ needs.deploy-monitoring.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Application Stack:** ${{ needs.deploy-application.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Health Check:** ${{ needs.health-check.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.health-check.result }}" = "success" ]; then
+            echo "## ✅ Deployment Successful" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Access URLs:**" >> $GITHUB_STEP_SUMMARY
+            echo "- WordPress: http://${{ needs.preflight.outputs.manager_ip }}" >> $GITHUB_STEP_SUMMARY
+            echo "- Grafana: http://${{ needs.preflight.outputs.manager_ip }}:3000" >> $GITHUB_STEP_SUMMARY
+            echo "- Prometheus: http://${{ needs.preflight.outputs.manager_ip }}:9090" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ❌ Deployment Issues Detected" >> $GITHUB_STEP_SUMMARY
+            echo "Check the logs for details and verify service status." >> $GITHUB_STEP_SUMMARY
+          fi

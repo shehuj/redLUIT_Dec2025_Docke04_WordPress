@@ -1,0 +1,183 @@
+name: PR to Dev - Cleanup Infrastructure
+
+on:
+  pull_request:
+    branches: ["dev"]
+    types: [closed]
+
+  workflow_dispatch:
+    inputs:
+      confirm_destroy:
+        description: 'Type DESTROY to confirm'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  TF_VERSION: '1.6.0'
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+
+jobs:
+  confirm-cleanup:
+    name: Confirm Cleanup
+    runs-on: ubuntu-latest
+
+    outputs:
+      should_cleanup: ${{ steps.check.outputs.proceed }}
+
+    steps:
+      - name: Check if cleanup should proceed
+        id: check
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "proceed=true" >> $GITHUB_OUTPUT
+            echo "✅ PR closed, will cleanup infrastructure"
+          elif [ "${{ inputs.confirm_destroy }}" = "DESTROY" ]; then
+            echo "proceed=true" >> $GITHUB_OUTPUT
+            echo "✅ Manual cleanup confirmed"
+          else
+            echo "proceed=false" >> $GITHUB_OUTPUT
+            echo "❌ Cleanup not confirmed"
+          fi
+
+  cleanup-infrastructure:
+    name: Destroy AWS Infrastructure
+    needs: confirm-cleanup
+    runs-on: ubuntu-latest
+    if: needs.confirm-cleanup.outputs.should_cleanup == 'true'
+
+    defaults:
+      run:
+        working-directory: infra/terraform
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        run: |
+          echo "🔧 Initializing Terraform..."
+          terraform init -reconfigure
+
+      - name: Check for existing infrastructure
+        id: check_infra
+        run: |
+          if terraform state list | grep -q "aws_instance"; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "📝 Infrastructure found, will destroy"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "✅ No infrastructure to destroy"
+          fi
+
+      - name: List resources to be destroyed
+        if: steps.check_infra.outputs.exists == 'true'
+        run: |
+          echo "📋 Resources to be destroyed:"
+          terraform state list
+
+      - name: Terraform Destroy
+        if: steps.check_infra.outputs.exists == 'true'
+        run: |
+          echo "🗑️ Destroying infrastructure..."
+          terraform destroy -auto-approve
+
+      - name: Verify destruction
+        if: steps.check_infra.outputs.exists == 'true'
+        run: |
+          REMAINING=$(terraform state list | wc -l || echo 0)
+          if [ "$REMAINING" -eq 0 ]; then
+            echo "✅ All resources destroyed successfully"
+          else
+            echo "⚠️ Some resources may still exist:"
+            terraform state list
+          fi
+
+      - name: Comment PR with cleanup result
+        if: github.event_name == 'pull_request' && steps.check_infra.outputs.exists == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const output = `#### 🗑️ Infrastructure Cleanup Complete
+
+            All AWS resources have been destroyed:
+            - EC2 instances (manager + workers)
+            - VPC and networking
+            - Security groups
+            - SSH key pairs
+
+            **Cost:** Infrastructure costs will stop accruing.
+
+            **Note:** The Terraform state is still preserved in S3 backend.
+            `;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            });
+
+      - name: Comment PR if no infrastructure
+        if: github.event_name == 'pull_request' && steps.check_infra.outputs.exists != 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const output = `#### ✅ No Infrastructure to Clean Up
+
+            No active infrastructure was found. Nothing to destroy.
+            `;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            });
+
+  cleanup-summary:
+    name: Cleanup Summary
+    needs: [confirm-cleanup, cleanup-infrastructure]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Generate summary
+        run: |
+          echo "# Infrastructure Cleanup Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Results" >> $GITHUB_STEP_SUMMARY
+          echo "- **Confirmation:** ${{ needs.confirm-cleanup.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Cleanup:** ${{ needs.cleanup-infrastructure.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.cleanup-infrastructure.result }}" = "success" ]; then
+            echo "## ✅ Cleanup Complete" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "All infrastructure resources have been destroyed." >> $GITHUB_STEP_SUMMARY
+            echo "AWS costs for this PR environment have stopped." >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.confirm-cleanup.outputs.should_cleanup }}" != "true" ]; then
+            echo "## ⏭️ Cleanup Skipped" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Cleanup was not confirmed." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ⚠️ Cleanup Had Issues" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Check the logs for details." >> $GITHUB_STEP_SUMMARY
+            echo "You may need to manually verify all resources are destroyed in AWS Console." >> $GITHUB_STEP_SUMMARY
+          fi
