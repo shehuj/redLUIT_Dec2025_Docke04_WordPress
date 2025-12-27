@@ -171,9 +171,11 @@ jobs:
         env:
           MANAGER_IP: ${{ needs.preflight.outputs.manager_ip }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          MON_STACK: ${{ env.MON_STACK }}
         run: |
-          ssh -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} bash << ENDSSH
+          # Export variables for heredoc expansion
+          export MON_STACK="${{ env.MON_STACK }}"
+
+          ssh -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} "bash -s" << ENDSSH
             echo "🚀 Deploying monitoring stack..."
 
             # Create slack webhook secret if provided
@@ -197,10 +199,12 @@ jobs:
       - name: Verify monitoring services
         env:
           MANAGER_IP: ${{ needs.preflight.outputs.manager_ip }}
-          MON_STACK: ${{ env.MON_STACK }}
         run: |
+          # Export variables for heredoc expansion
+          export MON_STACK="${{ env.MON_STACK }}"
+
           echo "🔍 Verifying monitoring services..."
-          ssh -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} bash << ENDSSH
+          ssh -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} "bash -s" << ENDSSH
             # Wait for services to be running
             for i in {1..12}; do
               RUNNING=\$(docker service ls --filter "name=${MON_STACK}" --format "{{.Replicas}}" | grep -c "1/1" || true)
@@ -264,9 +268,11 @@ jobs:
           MANAGER_IP: ${{ needs.preflight.outputs.manager_ip }}
           MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
           MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
-          SWARM_STACK: ${{ env.SWARM_STACK }}
         run: |
-          ssh -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} bash << ENDSSH
+          # Export variables for heredoc expansion
+          export SWARM_STACK="${{ env.SWARM_STACK }}"
+
+          ssh -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} "bash -s" << ENDSSH
             echo "🚀 Deploying WordPress application..."
 
             # Create database secrets
@@ -291,10 +297,12 @@ jobs:
       - name: Verify application services
         env:
           MANAGER_IP: ${{ needs.preflight.outputs.manager_ip }}
-          SWARM_STACK: ${{ env.SWARM_STACK }}
         run: |
+          # Export variables for heredoc expansion
+          export SWARM_STACK="${{ env.SWARM_STACK }}"
+
           echo "🔍 Verifying application services..."
-          ssh -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} bash << ENDSSH
+          ssh -o StrictHostKeyChecking=no ubuntu@${MANAGER_IP} "bash -s" << ENDSSH
             # Wait for services to be running
             for i in {1..18}; do
               RUNNING=\$(docker service ls --filter "name=${SWARM_STACK}" --format "{{.Replicas}}" | grep -c "/" || true)
