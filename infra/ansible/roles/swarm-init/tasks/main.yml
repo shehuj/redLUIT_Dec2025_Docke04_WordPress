@@ -7,6 +7,29 @@
   changed_when: false
   failed_when: false
 
+- name: Leave Swarm if in error state (workers)
+  command: docker swarm leave --force
+  when:
+    - inventory_hostname in groups['swarm_workers']
+    - swarm_status.stdout == 'error'
+  failed_when: false
+  changed_when: true
+
+- name: Leave Swarm if in error state (managers)
+  command: docker swarm leave --force
+  when:
+    - inventory_hostname in groups['swarm_managers']
+    - swarm_status.stdout == 'error'
+  failed_when: false
+  changed_when: true
+
+- name: Re-check Swarm status after reset
+  shell: docker info --format '{{"{{"}}.Swarm.LocalNodeState{{"}}"}}'
+  register: swarm_status
+  changed_when: false
+  failed_when: false
+  when: swarm_status.stdout == 'error'
+
 - name: Initialize Docker Swarm on manager
   command: >
     docker swarm init
@@ -49,6 +72,19 @@
   delay: 10
   when: inventory_hostname in groups['swarm_workers']
   changed_when: false
+
+- name: Show worker status if join failed
+  debug:
+    msg: |
+      Worker status: {{ final_status.stdout }}
+      If status is 'error', check:
+      1. UFW rules: sudo ufw status
+      2. Security groups allow port 2377 from workers
+      3. Manager is reachable: telnet {{ hostvars[groups['swarm_managers'][0]]['ansible_default_ipv4']['address'] }} 2377
+  when:
+    - inventory_hostname in groups['swarm_workers']
+    - final_status.stdout != 'active'
+  failed_when: final_status.stdout != 'active'
 
 - name: Verify Swarm cluster status
   command: docker node ls
