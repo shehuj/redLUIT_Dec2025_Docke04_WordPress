@@ -1,9 +1,14 @@
 name: Main Deployment Pipeline
 
 on:
-  # Trigger on merge to main
+  # Trigger on merge to main branch
   push:
     branches: ["main"]
+    paths:
+      - '**.yml'
+      - 'infra/**'
+      - 'tests/**'
+      - '**.py'
 
   # Allow manual trigger with options
   workflow_dispatch:
