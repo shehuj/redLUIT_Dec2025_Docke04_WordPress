@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v2.48.1  # Pinned version
     networks:
       - mon_net
     ports:
@@ -14,22 +14,54 @@ services:
         target: /etc/prometheus/prometheus.yml
       - source: prometheus_rules
         target: /etc/prometheus/alert.rules.yml
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9090/-/healthy || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     deploy:
       replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:10.2.3  # Pinned version
     networks:
       - mon_net
     ports:
       - "3000:3000"
     volumes:
       - grafana_data:/var/lib/grafana
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     deploy:
       replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
 
   alertmanager:
-    image: prom/alertmanager:latest
+    image: prom/alertmanager:v0.26.0  # Pinned version
     networks:
       - mon_net
     ports:
@@ -41,11 +73,27 @@ services:
       - slack_webhook_url
     environment:
       SLACK_WEBHOOK_URL_FILE: /run/secrets/slack_webhook_url
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9093/-/healthy || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     deploy:
       replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
 
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.45.0
+    image: gcr.io/cadvisor/cadvisor:v0.47.2  # Pinned version
     networks:
       - mon_net
     volumes:
@@ -53,15 +101,41 @@ services:
       - /var/run:/var/run:rw
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     deploy:
       mode: global
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
 
   node_exporter:
-    image: prom/node-exporter:latest
+    image: prom/node-exporter:v1.7.0  # Pinned version
     networks:
       - mon_net
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9100/metrics || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     deploy:
       mode: global
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
 
 networks:
   mon_net:

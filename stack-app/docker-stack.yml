@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   mysql:
-    image: mysql:8.0
+    image: mysql:8.0.35  # Pinned version
     networks:
       - backend
       - mon_net
@@ -23,12 +23,26 @@ services:
     volumes:
       - mysql_data:/var/lib/mysql
     deploy:
-      replicas: 1
+      replicas: 1  # Fixed: Changed from 2 to avoid data inconsistency without replication
+      placement:
+        constraints:
+          - node.role == worker
       restart_policy:
         condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+      update_config:
+        order: stop-first  # Prevents dual MySQL during updates
 
   wordpress:
-    image: wordpress:latest
+    image: wordpress:6.4.2-php8.1-apache  # Pinned version
     networks:
       - frontend
       - backend
@@ -52,8 +66,30 @@ services:
       - wp_data:/var/www/html
     deploy:
       replicas: 3
+      placement:
+        constraints:
+          - node.role == worker
+        max_replicas_per_node: 2  # Spread across nodes
       restart_policy:
         condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+        monitor: 30s
+      rollback_config:
+        parallelism: 1
+        delay: 5s
 
 networks:
   frontend:

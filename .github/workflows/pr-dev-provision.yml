@@ -21,7 +21,7 @@ env:
   TF_VERSION: '1.6.0'
   ANSIBLE_VERSION: '8.0.0'
   AWS_REGION: ${{ secrets.AWS_REGION }}
-  PYTHON_VERSION: '3.14'
+  PYTHON_VERSION: '3.12'
   ANSIBLE_FORCE_COLOR: 'true'
 
 jobs:

@@ -1,0 +1,203 @@
+---
+# Production Restore Playbook
+# Restores critical data to Docker Swarm cluster
+# WARNING: This will overwrite existing data
+
+- name: Restore Confirmation
+  hosts: localhost
+  gather_facts: false
+
+  vars_prompt:
+    - name: restore_timestamp
+      prompt: "Enter backup timestamp to restore (YYYYMMDDTHHMMSS format)"
+      private: false
+
+    - name: confirm_restore
+      prompt: "WARNING: This will overwrite existing data. Type 'RESTORE' to confirm"
+      private: false
+
+  tasks:
+    - name: Verify confirmation
+      ansible.builtin.assert:
+        that:
+          - confirm_restore == "RESTORE"
+        fail_msg: "Restore cancelled. You must type 'RESTORE' to confirm."
+        success_msg: "Restore confirmed. Proceeding..."
+
+    - name: Set restore timestamp fact
+      ansible.builtin.set_fact:
+        backup_timestamp: "{{ restore_timestamp }}"
+
+- name: Restore Monitoring Data
+  hosts: monitoring
+  become: true
+  gather_facts: true
+
+  vars:
+    backup_dir: "/var/backups/monitoring"
+    backup_timestamp: "{{ hostvars['localhost']['backup_timestamp'] }}"
+
+  tasks:
+    - name: Verify backup exists
+      ansible.builtin.stat:
+        path: "{{ backup_dir }}/{{ backup_timestamp }}"
+      register: backup_check
+
+    - name: Fail if backup doesn't exist
+      ansible.builtin.fail:
+        msg: "Backup not found at {{ backup_dir }}/{{ backup_timestamp }}"
+      when: not backup_check.stat.exists
+
+    - name: Stop monitoring services
+      ansible.builtin.command:
+        cmd: docker compose down
+        chdir: /opt/monitoring
+      failed_when: false
+      changed_when: true
+
+    - name: Remove existing Prometheus data
+      ansible.builtin.file:
+        path: /var/lib/docker/volumes/monitoring_prometheus_data
+        state: absent
+
+    - name: Remove existing Grafana data
+      ansible.builtin.file:
+        path: /var/lib/docker/volumes/monitoring_grafana_data
+        state: absent
+
+    - name: Restore Prometheus data
+      ansible.builtin.unarchive:
+        src: "{{ backup_dir }}/{{ backup_timestamp }}/prometheus_data.tar.gz"
+        dest: /var/lib/docker/volumes/
+        remote_src: true
+      when: backup_check.stat.exists
+
+    - name: Restore Grafana data
+      ansible.builtin.unarchive:
+        src: "{{ backup_dir }}/{{ backup_timestamp }}/grafana_data.tar.gz"
+        dest: /var/lib/docker/volumes/
+        remote_src: true
+      when: backup_check.stat.exists
+
+    - name: Restore monitoring configs
+      ansible.builtin.synchronize:
+        src: "{{ backup_dir }}/{{ backup_timestamp }}/configs/"
+        dest: /opt/monitoring/
+        delete: false
+      delegate_to: "{{ inventory_hostname }}"
+
+    - name: Start monitoring services
+      ansible.builtin.command:
+        cmd: docker compose up -d
+        chdir: /opt/monitoring
+      changed_when: true
+
+    - name: Wait for services to start
+      ansible.builtin.pause:
+        seconds: 30
+
+    - name: Verify Prometheus is running
+      ansible.builtin.uri:
+        url: "http://localhost:9090/-/healthy"
+        status_code: 200
+      register: prometheus_health
+      retries: 10
+      delay: 5
+      until: prometheus_health.status == 200
+
+    - name: Verify Grafana is running
+      ansible.builtin.uri:
+        url: "http://localhost:3000/api/health"
+        status_code: 200
+      register: grafana_health
+      retries: 10
+      delay: 5
+      until: grafana_health.status == 200
+
+- name: Restore Jenkins Data
+  hosts: swarm_manager
+  become: true
+  gather_facts: true
+
+  vars:
+    backup_dir: "/var/backups/jenkins"
+    backup_timestamp: "{{ hostvars['localhost']['backup_timestamp'] }}"
+
+  tasks:
+    - name: Check if Jenkins backup exists
+      ansible.builtin.stat:
+        path: "{{ backup_dir }}/{{ backup_timestamp }}/jenkins_data.tar.gz"
+      register: jenkins_backup_check
+
+    - name: Stop Jenkins service
+      ansible.builtin.command: docker service scale jenkins_jenkins=0
+      when: jenkins_backup_check.stat.exists
+      failed_when: false
+      changed_when: true
+
+    - name: Wait for Jenkins to stop
+      ansible.builtin.pause:
+        seconds: 15
+      when: jenkins_backup_check.stat.exists
+
+    - name: Remove existing Jenkins data
+      ansible.builtin.command: docker volume rm jenkins_jenkins_data
+      when: jenkins_backup_check.stat.exists
+      failed_when: false
+      changed_when: true
+
+    - name: Create new Jenkins volume
+      ansible.builtin.command: docker volume create jenkins_jenkins_data
+      when: jenkins_backup_check.stat.exists
+      changed_when: true
+
+    - name: Restore Jenkins data
+      ansible.builtin.shell: |
+        docker run --rm \
+          -v jenkins_jenkins_data:/data \
+          -v {{ backup_dir }}/{{ backup_timestamp }}:/backup \
+          alpine tar xzf /backup/jenkins_data.tar.gz -C /data
+      when: jenkins_backup_check.stat.exists
+      changed_when: true
+
+    - name: Start Jenkins service
+      ansible.builtin.command: docker service scale jenkins_jenkins=1
+      when: jenkins_backup_check.stat.exists
+      changed_when: true
+
+    - name: Wait for Jenkins to start
+      ansible.builtin.pause:
+        seconds: 60
+      when: jenkins_backup_check.stat.exists
+
+- name: Restore Verification
+  hosts: swarm_manager
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Verify swarm status
+      ansible.builtin.command: docker node ls
+      register: swarm_nodes
+      changed_when: false
+
+    - name: Verify services status
+      ansible.builtin.command: docker service ls
+      register: services_status
+      changed_when: false
+
+    - name: Display restore summary
+      ansible.builtin.debug:
+        msg:
+          - "========================================="
+          - "   Restore Completed"
+          - "========================================="
+          - ""
+          - "Swarm Nodes:"
+          - "{{ swarm_nodes.stdout_lines }}"
+          - ""
+          - "Services:"
+          - "{{ services_status.stdout_lines }}"
+          - ""
+          - "Please verify all services are functioning correctly"
+          - "========================================="
