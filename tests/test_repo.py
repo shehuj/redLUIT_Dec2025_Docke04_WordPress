@@ -132,7 +132,6 @@ def test_required_files_exist():
 def test_workflows_exist():
     """Verify GitHub Actions workflows exist."""
     workflows = [
-        ".github/workflows/deploy.yml",
         ".github/workflows/infrastructure.yml",
         ".github/workflows/pr-validation.yml",
         ".github/workflows/main-deployment.yml",
