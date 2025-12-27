@@ -2,48 +2,19 @@ name: Infrastructure Cleanup
 
 on:
   workflow_dispatch:
-    inputs:
-      confirmation:
-        description: 'Type "DESTROY" to confirm infrastructure destruction'
-        required: true
-        type: string
-      terraform_action:
-        description: 'Terraform action to perform'
-        required: true
-        default: 'plan-destroy'
-        type: choice
-        options:
-          - plan-destroy
-          - destroy
 
 env:
   TF_VERSION: '1.6.0'
   AWS_REGION: us-east-1
 
 jobs:
-  verify-and-plan:
-    name: Verify Confirmation and Plan Destroy
+  plan-destroy:
+    name: Plan Destroy
     runs-on: ubuntu-latest
-
-    outputs:
-      confirmed: ${{ steps.check_confirmation.outputs.confirmed }}
-      action: ${{ github.event.inputs.terraform_action }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Check confirmation
-        id: check_confirmation
-        run: |
-          if [ "${{ github.event.inputs.confirmation }}" != "DESTROY" ]; then
-            echo "❌ Confirmation failed. You must type 'DESTROY' to proceed."
-            echo "confirmed=false" >> $GITHUB_OUTPUT
-            exit 1
-          else
-            echo "✅ Confirmation received"
-            echo "confirmed=true" >> $GITHUB_OUTPUT
-          fi
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -63,36 +34,23 @@ jobs:
         run: terraform init -reconfigure
 
       - name: Terraform Plan Destroy
-        if: ${{ github.event.inputs.terraform_action == 'plan-destroy' }}
         working-directory: infra/terraform
         env:
           TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
         run: |
-          echo "=========================================="
-          echo "⚠️  DESTROY PLAN - Review resources to be destroyed:"
-          echo "=========================================="
           terraform plan -destroy -out=destroy.tfplan
-          echo ""
-          echo "=========================================="
-          echo "Resources that will be DESTROYED:"
-          echo "=========================================="
-          terraform show destroy.tfplan
 
       - name: Upload destroy plan
-        if: ${{ github.event.inputs.terraform_action == 'plan-destroy' }}
         uses: actions/upload-artifact@v4
         with:
           name: destroy-plan
           path: infra/terraform/destroy.tfplan
           retention-days: 1
 
-  destroy-infrastructure:
-    name: Destroy AWS Infrastructure
-    needs: verify-and-plan
+  destroy:
+    name: Destroy Infrastructure
     runs-on: ubuntu-latest
-    if: |
-      needs.verify-and-plan.outputs.confirmed == 'true' &&
-      needs.verify-and-plan.outputs.action == 'destroy'
+    needs: plan-destroy
 
     steps:
       - name: Checkout code
@@ -117,13 +75,6 @@ jobs:
           name: destroy-plan
           path: infra/terraform/
 
-      - name: Final warning before destroy
-        working-directory: infra/terraform
-        run: |
-          echo "⚠️⚠️⚠️ FINAL WARNING ⚠️⚠️⚠️"
-          echo "Destroying AWS infrastructure in 10 seconds..."
-          sleep 10
-
       - name: Terraform Apply Destroy
         working-directory: infra/terraform
         env:
@@ -132,4 +83,4 @@ jobs:
 
       - name: Summary
         run: |
-          echo "✅ Infrastructure destroyed successfully"
+          echo "🔥 Infrastructure destroyed"
