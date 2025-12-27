@@ -2,10 +2,11 @@
 # Create Docker secrets for WordPress and monitoring
 
 - name: Check existing Docker secrets
-  command: docker secret ls --format '{{.Name}}'
+  ansible.builtin.shell: docker secret ls --format '{{"{{"}}.Name{{"}}"}}'
   register: existing_secrets
   when: inventory_hostname in groups['swarm_managers']
   changed_when: false
+  failed_when: false
 
 - name: Create mysql_root_password secret
   shell: |
