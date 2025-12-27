@@ -40,12 +40,6 @@ variable "allowed_monitoring_cidrs" {
   default     = ["0.0.0.0/0"] # SECURITY: Restrict this in production!
 }
 
-variable "ssh_public_key" {
-  description = "SSH public key for EC2 instance access"
-  type        = string
-  sensitive   = true
-}
-
 variable "manager_instance_type" {
   description = "EC2 instance type for Swarm manager"
   type        = string

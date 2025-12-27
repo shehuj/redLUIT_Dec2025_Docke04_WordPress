@@ -227,3 +227,8 @@ override.tf.json
 # Note: hosts.ini is a template that gets overwritten by Terraform output
 # Keep it in repo as a template for manual setup
 /tmp/ansible-swarm.log
+
+# Deployment artifacts
+*.pem
+.deploy_vars
+swarm-key.pem
