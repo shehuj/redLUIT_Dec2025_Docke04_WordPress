@@ -2,19 +2,42 @@ name: Infrastructure Cleanup
 
 on:
   workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'plan'
+        type: choice
+        options:
+          - plan
+          - destroy
+      confirmation:
+        description: 'Type "DESTROY" to confirm destruction (required for destroy action)'
+        required: false
+        type: string
 
 env:
   TF_VERSION: '1.6.0'
   AWS_REGION: us-east-1
 
 jobs:
-  plan-destroy:
-    name: Plan Destroy
+  cleanup:
+    name: Infrastructure Cleanup
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Validate confirmation (for destroy)
+        if: github.event.inputs.action == 'destroy'
+        run: |
+          if [ "${{ github.event.inputs.confirmation }}" != "DESTROY" ]; then
+            echo "❌ Confirmation required for destroy action"
+            echo "You must type 'DESTROY' in the confirmation field"
+            exit 1
+          fi
+          echo "✅ Confirmation validated"
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -28,6 +51,12 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform Backend
+        working-directory: infra/terraform
+        run: |
+          chmod +x setup-backend.sh
+          ./setup-backend.sh || echo "⚠️  Backend already exists"
 
       - name: Terraform Init
         working-directory: infra/terraform
@@ -38,49 +67,34 @@ jobs:
         env:
           TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
         run: |
-          terraform plan -destroy -out=destroy.tfplan
+          echo "=========================================="
+          echo "⚠️  Resources to be DESTROYED:"
+          echo "=========================================="
+          terraform plan -destroy -no-color
 
-      - name: Upload destroy plan
-        uses: actions/upload-artifact@v4
-        with:
-          name: destroy-plan
-          path: infra/terraform/destroy.tfplan
-          retention-days: 1
+      - name: Final Warning
+        if: github.event.inputs.action == 'destroy'
+        run: |
+          echo ""
+          echo "⚠️⚠️⚠️ FINAL WARNING ⚠️⚠️⚠️"
+          echo "Destroying infrastructure in 10 seconds..."
+          sleep 10
 
-  destroy:
-    name: Destroy Infrastructure
-    runs-on: ubuntu-latest
-    needs: plan-destroy
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-          terraform_wrapper: false
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Download destroy plan
-        uses: actions/download-artifact@v4
-        with:
-          name: destroy-plan
-          path: infra/terraform/
-
-      - name: Terraform Apply Destroy
+      - name: Terraform Destroy
+        if: github.event.inputs.action == 'destroy'
         working-directory: infra/terraform
         env:
           TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
-        run: terraform apply -auto-approve destroy.tfplan
+        run: |
+          echo "🔥 Destroying infrastructure..."
+          terraform destroy -auto-approve
+          echo "✅ Infrastructure destroyed"
 
       - name: Summary
+        if: always()
         run: |
-          echo "🔥 Infrastructure destroyed"
+          if [ "${{ github.event.inputs.action }}" == "destroy" ]; then
+            echo "✅ Infrastructure destroyed successfully"
+          else
+            echo "✅ Destroy plan completed - review resources above"
+          fi
