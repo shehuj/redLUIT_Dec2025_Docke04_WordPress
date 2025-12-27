@@ -8,15 +8,8 @@ terraform {
     }
   }
 
-  # Optional: Store state in S3 for team collaboration
-  # Uncomment and configure for production use
-  # backend "s3" {
-  #   bucket         = "your-terraform-state-bucket"
-  #   key            = "swarm-infrastructure/terraform.tfstate"
-  #   region         = "us-east-1"
-  #   encrypt        = true
-  #   dynamodb_table = "terraform-state-lock"
-  # }
+  # Backend configuration is in backend.tf
+  # Run ./setup-backend.sh first to create S3 bucket and DynamoDB table
 }
 
 provider "aws" {

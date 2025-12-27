@@ -109,20 +109,33 @@ jobs:
         run: terraform fmt -check -recursive
         continue-on-error: true
 
-      - name: Terraform Init
+      - name: Terraform Init (without backend for validation)
         run: terraform init -backend=false
 
       - name: Terraform Validate
         run: terraform validate
 
-      - name: Terraform Plan (Dry Run)
+      - name: Configure AWS credentials for plan
+        if: github.event_name == 'pull_request'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Setup Terraform Backend (for plan)
+        if: github.event_name == 'pull_request'
+        run: |
+          chmod +x setup-backend.sh
+          ./setup-backend.sh || echo "⚠️  Backend may already exist"
+        continue-on-error: true
+
+      - name: Terraform Plan (Dry Run with backend)
         if: github.event_name == 'pull_request'
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
         run: |
-          terraform init
+          terraform init -reconfigure
           terraform plan -input=false -no-color
         continue-on-error: true
 
