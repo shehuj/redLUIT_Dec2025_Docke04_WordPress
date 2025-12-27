@@ -4,7 +4,7 @@
 terraform {
   backend "s3" {
     # S3 bucket for state storage (created by setup-backend.sh)
-    bucket = "wordpress-swarm-terraform-state"
+    bucket = "ec2-shutdown-lambda-bucket"
     key    = "infrastructure/terraform.tfstate"
     region = "us-east-1"
 
@@ -12,7 +12,7 @@ terraform {
     encrypt = true
 
     # DynamoDB table for state locking (prevents concurrent modifications)
-    dynamodb_table = "wordpress-swarm-terraform-locks"
+    dynamodb_table = "dyning_table"
 
     # Workspace isolation
     workspace_key_prefix = "workspaces"
@@ -21,6 +21,6 @@ terraform {
 
 # NOTE: Backend cannot use variables, so values are hardcoded
 # To customize:
-# 1. Update bucket name above
+# 1. Update bucket name in both backend.tf and setup-backend.sh
 # 2. Run: ./setup-backend.sh to create S3 bucket and DynamoDB table
-# 3. Run: terraform init -migrate-state to migrate existing state
+# 3. Run: terraform init -reconfigure to initialize backend
