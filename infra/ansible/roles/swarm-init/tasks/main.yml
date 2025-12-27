@@ -26,10 +26,10 @@
     --advertise-addr {{ ansible_default_ipv4.address }}
   when:
     - inventory_hostname in groups['swarm_managers']
+    - swarm_status.stdout is defined
     - swarm_status.stdout != 'active'
   register: swarm_init
   changed_when: "'Swarm initialized' in swarm_init.stdout"
-
 # Get worker join token (from first manager only)
 - name: Get worker join token
   ansible.builtin.command: docker swarm join-token -q worker
