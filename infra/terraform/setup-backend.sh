@@ -6,8 +6,8 @@ set -e
 
 # Configuration
 BUCKET_NAME="ec2-shutdown-lambda-bucket"
-DYNAMODB_TABLE="dyning-table"
-AWS_REGION="${us-east-1}"
+DYNAMODB_TABLE="dyning_table"
+AWS_REGION="us-east-1"
 
 echo "🚀 Setting up Terraform backend infrastructure..."
 echo ""
