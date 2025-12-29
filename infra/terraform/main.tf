@@ -59,4 +59,9 @@ resource "aws_key_pair" "swarm_key" {
   tags = {
     Name = "${var.project_name}-swarm-key"
   }
+
+  lifecycle {
+    create_before_destroy = true
+    ignore_changes        = [tags["CreatedAt"]]
+  }
 }
