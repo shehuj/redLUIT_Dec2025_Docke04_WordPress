@@ -5,7 +5,7 @@ terraform {
   backend "s3" {
     # S3 bucket for state storage (created by setup-backend.sh)
     bucket = "ec2-shutdown-lambda-bucket"
-    key    = "infrastructure/terraform.tfstate"
+    key    = "monit-infra/terraform.tfstate"
     region = "us-east-1"
 
     # Enable encryption at rest

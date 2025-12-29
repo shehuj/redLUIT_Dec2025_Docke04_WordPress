@@ -44,11 +44,31 @@
   changed_when: false
   run_once: true
 
+# Test network connectivity from workers to manager before joining
+- name: Test connectivity to manager port 2377
+  ansible.builtin.wait_for:
+    host: "{{ hostvars[groups['swarm_managers'][0]]['ansible_default_ipv4']['address'] }}"
+    port: 2377
+    timeout: 10
+    state: started
+  when:
+    - inventory_hostname in groups['swarm_workers']
+    - swarm_status.stdout != 'active'
+  register: connectivity_test
+  failed_when: false
+
+- name: Display connectivity test result
+  ansible.builtin.debug:
+    msg: "{{ 'Manager reachable on port 2377' if connectivity_test.failed is false else 'WARNING: Cannot reach manager on port 2377 - check security groups/firewall' }}"
+  when:
+    - inventory_hostname in groups['swarm_workers']
+    - connectivity_test is defined
+
 # Join workers if not already active
 - name: Join worker to Swarm
   ansible.builtin.command: >
     docker swarm join
-    --token {{ worker_token.stdout }}
+    --token {{ hostvars[groups['swarm_managers'][0]]['worker_token']['stdout'] }}
     {{ hostvars[groups['swarm_managers'][0]]['ansible_default_ipv4']['address'] }}:2377
   when:
     - inventory_hostname in groups['swarm_workers']
@@ -56,6 +76,17 @@
   register: join_result
   failed_when: false
   changed_when: "'This node joined a swarm' in join_result.stdout"
+
+# Display join result for debugging
+- name: Display worker join result
+  ansible.builtin.debug:
+    msg:
+      - "Join command output: {{ join_result.stdout if join_result.stdout is defined else 'N/A' }}"
+      - "Join command error: {{ join_result.stderr if join_result.stderr is defined else 'N/A' }}"
+      - "Return code: {{ join_result.rc if join_result.rc is defined else 'N/A' }}"
+  when:
+    - inventory_hostname in groups['swarm_workers']
+    - join_result is defined
 
 # Wait for workers to settle
 - name: Wait for workers to join
@@ -73,19 +104,55 @@
   when: inventory_hostname in groups['swarm_workers']
   changed_when: false
 
-# Show status message on fail
-- name: Debug worker join failure
-  ansible.builtin.debug:
-    msg: |
-      Worker status: {{ final_status.stdout }}
-      If not 'active', ensure:
-        - Manager reachable on port 2377
-        - Security groups / firewall rules allow communication
-        - Join token correct
+# Show detailed diagnostics on fail
+- name: Gather diagnostic information on failure
+  ansible.builtin.shell: |
+    echo "=== Docker Swarm Info ==="
+    docker info | grep -A 10 Swarm || true
+    echo ""
+    echo "=== Docker Version ==="
+    docker version --format '{{.Server.Version}}' || true
+    echo ""
+    echo "=== Network Connectivity ==="
+    nc -zv {{ hostvars[groups['swarm_managers'][0]]['ansible_default_ipv4']['address'] }} 2377 2>&1 || true
+    echo ""
+    echo "=== Recent Docker Logs ==="
+    journalctl -u docker -n 20 --no-pager || true
+  register: diagnostics
   when:
     - inventory_hostname in groups['swarm_workers']
     - final_status.stdout != 'active'
-  failed_when: final_status.stdout != 'active'
+  failed_when: false
+
+- name: Display worker join failure diagnostics
+  ansible.builtin.debug:
+    msg: |
+      ==========================================
+      Worker Join Failed - Diagnostics
+      ==========================================
+      Worker status: {{ final_status.stdout }}
+      Manager IP: {{ hostvars[groups['swarm_managers'][0]]['ansible_default_ipv4']['address'] }}
+
+      Common causes:
+      1. Security Groups: Port 2377/tcp not open between workers and manager
+      2. Network ACLs: Blocking traffic between subnets
+      3. Docker daemon: Not running or in error state
+      4. Previous swarm membership: Node needs 'docker swarm leave --force'
+
+      Connectivity test result: {{ 'PASS' if connectivity_test.failed is false else 'FAIL - Cannot reach manager on port 2377' }}
+
+      {{ diagnostics.stdout if diagnostics is defined else '' }}
+      ==========================================
+  when:
+    - inventory_hostname in groups['swarm_workers']
+    - final_status.stdout != 'active'
+
+- name: Fail if worker not active
+  ansible.builtin.fail:
+    msg: "Worker failed to join swarm. See diagnostics above."
+  when:
+    - inventory_hostname in groups['swarm_workers']
+    - final_status.stdout != 'active'
 
 # Show nodes on manager
 - name: Verify Swarm cluster nodes
