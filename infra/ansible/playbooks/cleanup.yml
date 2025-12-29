@@ -1,0 +1,374 @@
+---
+# Manual Cleanup Playbook for WordPress Docker Swarm Deployment
+# This playbook safely removes Docker Swarm resources
+#
+# Usage:
+#   ansible-playbook -i inventory/hosts cleanup.yml
+#
+# Options (use --extra-vars):
+#   - preserve_data=true       Keep volumes (default: false)
+#   - preserve_secrets=false   Remove secrets (default: true)
+#   - leave_swarm=false        Leave Docker Swarm (default: false)
+#   - backup_before=true       Backup before cleanup (default: false)
+#
+
+- name: WordPress Docker Swarm Cleanup
+  hosts: swarm_managers
+  become: yes
+  gather_facts: true
+
+  vars:
+    preserve_data: "{{ preserve_data | default(false) }}"
+    preserve_secrets: "{{ preserve_secrets | default(true) }}"
+    leave_swarm: "{{ leave_swarm | default(false) }}"
+    backup_before: "{{ backup_before | default(false) }}"
+
+    stacks_to_remove:
+      - wordpress-app
+      - monitoring
+
+    secrets_to_remove:
+      - mysql_root_password
+      - mysql_password
+      - slack_webhook_url
+
+    configs_to_remove:
+      - prometheus_config
+      - prometheus_rules
+      - alertmanager_config
+
+    volumes_to_remove:
+      - wordpress-app_mysql_data
+      - wordpress-app_wp_data
+      - monitoring_prometheus_data
+      - monitoring_grafana_data
+
+    networks_to_remove:
+      - wordpress-app_frontend
+      - wordpress-app_backend
+      - mon_net
+
+  pre_tasks:
+    - name: Display cleanup configuration
+      debug:
+        msg:
+          - "=========================================="
+          - "Cleanup Configuration:"
+          - "=========================================="
+          - "Preserve Data (volumes): {{ preserve_data }}"
+          - "Preserve Secrets: {{ preserve_secrets }}"
+          - "Leave Docker Swarm: {{ leave_swarm }}"
+          - "Backup Before Cleanup: {{ backup_before }}"
+          - "=========================================="
+
+    - name: Verify Docker is running
+      command: docker info
+      register: docker_info
+      failed_when: false
+      changed_when: false
+
+    - name: Fail if Docker is not running
+      fail:
+        msg: "Docker is not running on this host"
+      when: docker_info.rc != 0
+
+    - name: Check if node is part of a swarm
+      command: docker info --format '{{ "{{" }}.Swarm.LocalNodeState{{ "}}" }}'
+      register: swarm_state
+      changed_when: false
+      failed_when: false
+
+    - name: Warn if not in swarm mode
+      debug:
+        msg: "⚠️  Warning: This node is not part of a Docker Swarm"
+      when: swarm_state.stdout != "active"
+
+  tasks:
+    # ============================================
+    # BACKUP SECTION (Optional)
+    # ============================================
+    - name: Run backup before cleanup
+      when: backup_before | bool
+      block:
+        - name: Include backup playbook
+          include_tasks: backup.yml
+
+        - name: Wait for backup to complete
+          pause:
+            seconds: 5
+
+    # ============================================
+    # STACK REMOVAL
+    # ============================================
+    - name: Get list of running stacks
+      command: docker stack ls --format '{{ "{{" }}.Name{{ "}}" }}'
+      register: running_stacks
+      changed_when: false
+      failed_when: false
+
+    - name: Display running stacks
+      debug:
+        msg: "Running stacks: {{ running_stacks.stdout_lines }}"
+
+    - name: Remove Docker stacks
+      command: docker stack rm {{ item }}
+      loop: "{{ stacks_to_remove }}"
+      when:
+        - swarm_state.stdout == "active"
+        - item in running_stacks.stdout_lines
+      register: stack_removal
+
+    - name: Wait for stacks to be removed
+      pause:
+        seconds: 15
+        prompt: "Waiting for Docker stacks to be fully removed..."
+      when: stack_removal.changed
+
+    - name: Verify stacks are removed
+      command: docker stack ls --format '{{ "{{" }}.Name{{ "}}" }}'
+      register: remaining_stacks
+      changed_when: false
+      failed_when: false
+
+    - name: Display remaining stacks
+      debug:
+        msg: "{{ remaining_stacks.stdout_lines | default(['No stacks running']) }}"
+
+    # ============================================
+    # SERVICES CLEANUP (Safety check)
+    # ============================================
+    - name: Get remaining services
+      command: docker service ls --format '{{ "{{" }}.Name{{ "}}" }}'
+      register: remaining_services
+      changed_when: false
+      failed_when: false
+      when: swarm_state.stdout == "active"
+
+    - name: Remove orphaned services
+      command: docker service rm {{ item }}
+      loop: "{{ remaining_services.stdout_lines }}"
+      when:
+        - swarm_state.stdout == "active"
+        - remaining_services.stdout_lines is defined
+        - remaining_services.stdout_lines | length > 0
+      failed_when: false
+
+    # ============================================
+    # CONFIGS REMOVAL
+    # ============================================
+    - name: Get list of configs
+      command: docker config ls --format '{{ "{{" }}.Name{{ "}}" }}'
+      register: existing_configs
+      changed_when: false
+      failed_when: false
+      when: swarm_state.stdout == "active"
+
+    - name: Remove Docker configs
+      command: docker config rm {{ item }}
+      loop: "{{ configs_to_remove }}"
+      when:
+        - swarm_state.stdout == "active"
+        - existing_configs.stdout_lines is defined
+        - item in existing_configs.stdout_lines
+      failed_when: false
+
+    # ============================================
+    # SECRETS REMOVAL
+    # ============================================
+    - name: Get list of secrets
+      command: docker secret ls --format '{{ "{{" }}.Name{{ "}}" }}'
+      register: existing_secrets
+      changed_when: false
+      failed_when: false
+      when:
+        - swarm_state.stdout == "active"
+        - not (preserve_secrets | bool)
+
+    - name: Remove Docker secrets
+      command: docker secret rm {{ item }}
+      loop: "{{ secrets_to_remove }}"
+      when:
+        - swarm_state.stdout == "active"
+        - not (preserve_secrets | bool)
+        - existing_secrets.stdout_lines is defined
+        - item in existing_secrets.stdout_lines
+      failed_when: false
+
+    - name: Display secrets status
+      debug:
+        msg: "✓ Secrets {{ 'preserved' if preserve_secrets else 'removed' }}"
+
+    # ============================================
+    # VOLUMES REMOVAL
+    # ============================================
+    - name: Get list of volumes
+      command: docker volume ls --format '{{ "{{" }}.Name{{ "}}" }}'
+      register: existing_volumes
+      changed_when: false
+      failed_when: false
+
+    - name: Display volumes to be removed
+      debug:
+        msg: "Volumes marked for removal: {{ volumes_to_remove }}"
+      when: not (preserve_data | bool)
+
+    - name: Confirm volume removal
+      pause:
+        prompt: |
+          ⚠️  WARNING: You are about to delete the following volumes:
+          {{ volumes_to_remove | join('\n') }}
+
+          This will PERMANENTLY DELETE all data including:
+          - WordPress files and uploads
+          - MySQL database
+          - Prometheus metrics history
+          - Grafana dashboards and settings
+
+          Press Ctrl+C and then 'A' to abort, or Enter to continue
+      when:
+        - not (preserve_data | bool)
+        - existing_volumes.stdout_lines is defined
+        - (volumes_to_remove | intersect(existing_volumes.stdout_lines) | length) > 0
+
+    - name: Remove Docker volumes
+      command: docker volume rm {{ item }}
+      loop: "{{ volumes_to_remove }}"
+      when:
+        - not (preserve_data | bool)
+        - existing_volumes.stdout_lines is defined
+        - item in existing_volumes.stdout_lines
+      failed_when: false
+      register: volume_removal
+
+    - name: Display volume removal status
+      debug:
+        msg: "{{ 'Data volumes preserved' if preserve_data else 'Data volumes removed' }}"
+
+    # ============================================
+    # NETWORKS REMOVAL
+    # ============================================
+    - name: Get list of networks
+      command: docker network ls --format '{{ "{{" }}.Name{{ "}}" }}'
+      register: existing_networks
+      changed_when: false
+      failed_when: false
+
+    - name: Remove Docker networks
+      command: docker network rm {{ item }}
+      loop: "{{ networks_to_remove }}"
+      when:
+        - existing_networks.stdout_lines is defined
+        - item in existing_networks.stdout_lines
+      failed_when: false
+
+    # ============================================
+    # SYSTEM CLEANUP
+    # ============================================
+    - name: Run Docker system prune
+      command: docker system prune -f
+      register: prune_result
+      changed_when: "'Total reclaimed space' in prune_result.stdout"
+
+    - name: Display prune results
+      debug:
+        var: prune_result.stdout_lines
+
+    # ============================================
+    # LEAVE SWARM (Optional)
+    # ============================================
+    - name: Leave Docker Swarm
+      when: leave_swarm | bool
+      block:
+        - name: Confirm swarm leave
+          pause:
+            prompt: |
+              ⚠️  WARNING: You are about to leave Docker Swarm mode
+
+              This will:
+              - Remove this node from the swarm cluster
+              - Disable all swarm-specific features
+              - Require swarm re-initialization if you want to use it again
+
+              Press Ctrl+C and then 'A' to abort, or Enter to continue
+
+        - name: Force leave swarm (managers)
+          command: docker swarm leave --force
+          when: "'manager' in groups and inventory_hostname in groups['swarm_managers']"
+          register: swarm_leave_result
+          failed_when: false
+
+        - name: Leave swarm (workers)
+          command: docker swarm leave
+          when: "'worker' in groups and inventory_hostname in groups['swarm_workers']"
+          register: swarm_leave_result
+          failed_when: false
+
+        - name: Display swarm leave status
+          debug:
+            msg: "{{ swarm_leave_result.stdout }}"
+          when: swarm_leave_result is defined
+
+  post_tasks:
+    # ============================================
+    # VERIFICATION & SUMMARY
+    # ============================================
+    - name: Verify cleanup completion
+      block:
+        - name: Check remaining stacks
+          command: docker stack ls
+          register: final_stacks
+          changed_when: false
+          failed_when: false
+
+        - name: Check remaining volumes
+          command: docker volume ls
+          register: final_volumes
+          changed_when: false
+          failed_when: false
+
+        - name: Check remaining networks
+          command: docker network ls
+          register: final_networks
+          changed_when: false
+          failed_when: false
+
+        - name: Check swarm status
+          command: docker info --format '{{ "{{" }}.Swarm.LocalNodeState{{ "}}" }}'
+          register: final_swarm_state
+          changed_when: false
+          failed_when: false
+
+    - name: Display cleanup summary
+      debug:
+        msg:
+          - "=========================================="
+          - "Cleanup Summary"
+          - "=========================================="
+          - "Stacks Removed: {{ stacks_to_remove | join(', ') }}"
+          - "Configs Removed: {{ configs_to_remove | join(', ') }}"
+          - "Secrets Status: {{ 'Preserved' if preserve_secrets else 'Removed' }}"
+          - "Data Volumes: {{ 'Preserved' if preserve_data else 'Removed' }}"
+          - "Networks Removed: {{ networks_to_remove | join(', ') }}"
+          - "Swarm Status: {{ final_swarm_state.stdout }}"
+          - ""
+          - "Remaining Resources:"
+          - "  Stacks: {{ final_stacks.stdout_lines | length - 1 if final_stacks.stdout_lines is defined else 0 }}"
+          - "  Volumes: {{ final_volumes.stdout_lines | length - 1 if final_volumes.stdout_lines is defined else 0 }}"
+          - ""
+          - "✅ Cleanup completed successfully!"
+          - "=========================================="
+
+    - name: Cleanup recommendations
+      debug:
+        msg:
+          - ""
+          - "Next Steps:"
+          - "1. Review remaining resources: docker stack ls, docker volume ls"
+          - "2. If Terraform infrastructure is no longer needed, run:"
+          - "   cd infra/terraform && terraform destroy"
+          - "3. To completely remove Docker data directory (DESTRUCTIVE):"
+          - "   sudo rm -rf /var/lib/docker"
+          - ""
+          - "To preserve data for future deployments, keep the volumes:"
+          - "  - wordpress-app_mysql_data (WordPress database)"
+          - "  - wordpress-app_wp_data (WordPress files)"
