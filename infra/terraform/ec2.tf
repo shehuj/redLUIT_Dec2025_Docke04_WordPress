@@ -36,6 +36,7 @@ resource "aws_instance" "swarm_worker" {
   ami           = data.aws_ami.ubuntu.id
   instance_type = var.worker_instance_type
   key_name      = aws_key_pair.swarm_key.key_name
+  monitoring    = true  # Ensure detailed monitoring is enabled
 
   subnet_id                   = aws_subnet.public[count.index % length(aws_subnet.public)].id
   vpc_security_group_ids      = [aws_security_group.swarm_worker.id]
