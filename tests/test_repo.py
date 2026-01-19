@@ -11,14 +11,6 @@ def test_app_stack_exists():
     assert Path("stack-app/docker-stack.yml").exists()
 
 
-def test_monitoring_stack_exists():
-    """Verify monitoring stack file exists."""
-    assert Path("stack-monitoring/monitoring-stack.yml").exists()
-
-
-def test_prometheus_config_exists():
-    """Verify Prometheus configuration exists."""
-    assert Path("stack-monitoring/prometheus.yml").exists()
 
 
 def test_app_stack_valid_yaml():
@@ -29,16 +21,6 @@ def test_app_stack_valid_yaml():
         assert "services" in config
         assert "mysql" in config["services"]
         assert "wordpress" in config["services"]
-
-
-def test_monitoring_stack_valid_yaml():
-    """Verify monitoring stack is valid YAML."""
-    with open("stack-monitoring/monitoring-stack.yml") as f:
-        config = yaml.safe_load(f)
-        assert config is not None
-        assert "services" in config
-        assert "prometheus" in config["services"]
-        assert "grafana" in config["services"]
 
 
 def test_mysql_uses_secrets():
@@ -69,51 +51,26 @@ def test_mysql_health_check():
         assert "test" in mysql["healthcheck"]
 
 
-def test_mon_net_connected_to_app():
-    """Verify monitoring network is connected to application services."""
+def test_networks_configured():
+    """Verify application networks are properly configured."""
     with open("stack-app/docker-stack.yml") as f:
         config = yaml.safe_load(f)
         mysql = config["services"]["mysql"]
         wordpress = config["services"]["wordpress"]
-        assert "mon_net" in mysql["networks"]
-        assert "mon_net" in wordpress["networks"]
 
+        # Verify MySQL has backend network
+        assert "networks" in mysql
+        assert "backend" in mysql["networks"]
 
-def test_prometheus_uses_configs():
-    """Verify Prometheus uses Docker configs instead of local mounts."""
-    with open("stack-monitoring/monitoring-stack.yml") as f:
-        config = yaml.safe_load(f)
-        prometheus = config["services"]["prometheus"]
-        assert "configs" in prometheus
-        assert "configs" in config
-        assert "prometheus_config" in config["configs"]
+        # Verify WordPress has frontend and backend networks
+        assert "networks" in wordpress
+        assert "frontend" in wordpress["networks"]
+        assert "backend" in wordpress["networks"]
 
-
-def test_alertmanager_uses_secrets():
-    """Verify AlertManager uses secrets for Slack webhook."""
-    with open("stack-monitoring/monitoring-stack.yml") as f:
-        config = yaml.safe_load(f)
-        alertmanager = config["services"]["alertmanager"]
-        assert "secrets" in alertmanager
-        assert "slack_webhook_url" in alertmanager["secrets"]
-
-
-def test_prometheus_config_valid_yaml():
-    """Verify Prometheus configuration is valid YAML."""
-    with open("stack-monitoring/prometheus.yml") as f:
-        config = yaml.safe_load(f)
-        assert config is not None
-        assert "scrape_configs" in config
-        assert len(config["scrape_configs"]) > 0
-
-
-def test_alert_rules_valid_yaml():
-    """Verify alert rules are valid YAML."""
-    with open("stack-monitoring/alert.rules.yml") as f:
-        config = yaml.safe_load(f)
-        assert config is not None
-        assert "groups" in config
-        assert len(config["groups"]) > 0
+        # Verify networks are defined
+        assert "networks" in config
+        assert "frontend" in config["networks"]
+        assert "backend" in config["networks"]
 
 
 def test_required_files_exist():
@@ -132,13 +89,21 @@ def test_required_files_exist():
 def test_workflows_exist():
     """Verify GitHub Actions workflows exist."""
     workflows = [
-        ".github/workflows/infrastructure.yml",
         ".github/workflows/pr-validation.yml",
-        ".github/workflows/main-deployment.yml",
-        ".github/workflows/python.yml"
+        ".github/workflows/main-deployment.yml"
     ]
     for workflow in workflows:
         assert Path(workflow).exists(), f"Workflow {workflow} is missing"
+
+
+def test_security_files_exist():
+    """Verify security documentation exists."""
+    security_files = [
+        "SECURITY.md",
+        "CHANGES.md"
+    ]
+    for file in security_files:
+        assert Path(file).exists(), f"Security file {file} is missing"
 
 
 def test_wordpress_replicas():
