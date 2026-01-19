@@ -67,33 +67,6 @@ resource "aws_security_group" "swarm_manager" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # Prometheus
-  ingress {
-    description = "Prometheus"
-    from_port   = 9090
-    to_port     = 9090
-    protocol    = "tcp"
-    cidr_blocks = var.allowed_monitoring_cidrs
-  }
-
-  # Grafana
-  ingress {
-    description = "Grafana"
-    from_port   = 3000
-    to_port     = 3000
-    protocol    = "tcp"
-    cidr_blocks = var.allowed_monitoring_cidrs
-  }
-
-  # AlertManager
-  ingress {
-    description = "AlertManager"
-    from_port   = 9093
-    to_port     = 9093
-    protocol    = "tcp"
-    cidr_blocks = var.allowed_monitoring_cidrs
-  }
-
   # Outbound traffic
   egress {
     description = "Allow all outbound"

@@ -78,16 +78,16 @@ def test_ansible_playbooks_exist():
     assert (playbooks_dir / "swarm-setup.yml").exists(), "swarm-setup.yml playbook not found"
 
 
-def test_infrastructure_workflow_exists():
-    """Test that infrastructure workflow exists."""
-    workflow_file = REPO_ROOT / ".github" / "workflows" / "infrastructure.yml"
-    assert workflow_file.exists(), "infrastructure.yml workflow not found"
+def test_pr_validation_workflow_exists():
+    """Test that PR validation workflow exists."""
+    workflow_file = REPO_ROOT / ".github" / "workflows" / "pr-validation.yml"
+    assert workflow_file.exists(), "pr-validation.yml workflow not found"
 
 
-def test_infrastructure_cleanup_workflow_exists():
-    """Test that infrastructure cleanup workflow exists."""
-    workflow_file = REPO_ROOT / ".github" / "workflows" / "infrastructure-cleanup.yml"
-    assert workflow_file.exists(), "infrastructure-cleanup.yml workflow not found"
+def test_main_deployment_workflow_exists():
+    """Test that main deployment workflow exists."""
+    workflow_file = REPO_ROOT / ".github" / "workflows" / "main-deployment.yml"
+    assert workflow_file.exists(), "main-deployment.yml workflow not found"
 
 
 def test_group_vars_files_exist():

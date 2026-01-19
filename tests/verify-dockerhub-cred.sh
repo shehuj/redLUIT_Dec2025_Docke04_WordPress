@@ -1,6 +1,6 @@
 #!/bin/bash
-read -p "Enter Docker Hub username: " ${DOCKER_USERNAME}
-read -s -p "Enter Docker Hub access token: " ${DOCKER_PASSWORD}
+read -r -p "Enter Docker Hub username: " DOCKER_USERNAME
+read -r -s -p "Enter Docker Hub access token: " DOCKER_PASSWORD
 echo ""
 
 echo "Testing credentials..."

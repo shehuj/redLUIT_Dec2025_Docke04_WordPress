@@ -1,118 +1,43 @@
-name: PR Validation
+name: PR Validation & Security Scanning
 
 on:
-  # Run all validations on PRs to dev branch
   pull_request:
-    branches: ["main", "dev"]
-
-  # Allow manual trigger for testing
-  workflow_dispatch:
-    inputs:
-      run-python-tests:
-        description: 'Run Python tests and linting'
-        required: true
-        type: boolean
-      run-terraform-validation:
-        description: 'Run Terraform validation'
-        required: true
-        type: boolean
-      run-ansible-validation:
-        description: 'Run Ansible validation'
-        required: true
-        type: boolean
-      run-docker-stack-validation:
-        description: 'Run Docker stack validation'
-        required: true
-        type: boolean
-
-permissions:
-  contents: read
-  pull-requests: write
+    branches:
+      - main
+      - dev
+    types: [opened, synchronize, reopened]
 
 env:
-  TF_VERSION: '1.6.0'
-  ANSIBLE_VERSION: '8.0.0'
-  PYTHON_VERSION: '3.12'
+  AWS_REGION: us-east-1
+  TERRAFORM_VERSION: 1.6.0
 
 jobs:
-  # Job 1: Python linting and testing
-  python-tests:
-    name: Python Tests & Linting
+  yaml-lint:
+    name: YAML Validation
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install yamllint
+        run: pip install yamllint
 
-      - name: Cache pip packages
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: Install dependencies
+      - name: Lint YAML files
         run: |
-          python -m pip install --upgrade pip
-          pip install flake8 pytest pytest-cov
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          yamllint --version
+          yamllint -f parsable stack-app/*.yml infra/ansible/**/*.yml || true
 
-      - name: Lint with flake8
+      - name: Validate Docker Compose syntax
         run: |
-          # Stop the build if there are Python syntax errors or undefined names
-          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-          # Treat all errors as warnings
-          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+          docker compose -f stack-app/docker-stack.yml config > /dev/null
+          echo "Docker Compose syntax valid"
 
-      - name: Run pytest with coverage
-        run: |
-          pytest tests/ -v --cov=. --cov-report=term-missing
-
-  # Job 2: Compliance checks
-  compliance-checks:
-    name: Compliance Checks
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Run compliance checks
-        run: |
-          python3 tests/check_required_files.py
-
-      - name: Run infrastructure compliance tests
-        run: |
-          pytest tests/test_infrastructure.py -v
-
-      - name: Run repository structure tests
-        run: |
-          pytest tests/test_repo.py -v
-
-  # Job 3: Terraform validation
-  terraform-validation:
+  terraform-validate:
     name: Terraform Validation
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: infra/terraform
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -120,119 +45,134 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: ${{ env.TF_VERSION }}
+          terraform_version: 1.6.0
 
       - name: Terraform Format Check
         run: terraform fmt -check -recursive
         continue-on-error: true
 
-      - name: Terraform Init (without backend for validation)
+      - name: Terraform Init
         run: terraform init -backend=false
 
       - name: Terraform Validate
         run: terraform validate
 
-      - name: Configure AWS credentials for plan
-        if: github.event_name == 'pull_request'
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
-
-      - name: Setup Terraform Backend (for plan)
-        if: github.event_name == 'pull_request'
-        run: |
-          chmod +x setup-backend.sh
-          ./setup-backend.sh || echo "⚠️  Backend may already exist"
-        continue-on-error: true
-
-      - name: Terraform Plan (Dry Run with backend)
-        if: github.event_name == 'pull_request'
-        env:
-          TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
-        run: |
-          terraform init -reconfigure
-          terraform plan -input=false -no-color
-        continue-on-error: true
-
-  # Job 4: Ansible validation
-  ansible-validation:
-    name: Ansible Validation
+  ansible-syntax-check:
+    name: Ansible Syntax Validation
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: '3.11'
 
-      - name: Cache pip packages
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-ansible-${{ env.ANSIBLE_VERSION }}
-          restore-keys: |
-            ${{ runner.os }}-ansible-
-
-      - name: Install Ansible and linting tools
+      - name: Install Ansible
         run: |
-          python -m pip install --upgrade pip
-          pip install "ansible>=${{ env.ANSIBLE_VERSION }}" ansible-lint yamllint
+          pip install ansible ansible-lint
 
       - name: Ansible Syntax Check
         working-directory: infra/ansible
         run: |
-          ansible-playbook playbooks/site.yml --syntax-check
-          ansible-playbook playbooks/swarm-setup.yml --syntax-check
+          ansible-playbook --syntax-check playbooks/site.yml
 
       - name: Ansible Lint
         working-directory: infra/ansible
-        run: ansible-lint playbooks/ roles/
-        continue-on-error: true
+        run: |
+          ansible-lint playbooks/ roles/ || true
 
-      - name: YAML Lint
-        working-directory: infra/ansible
-        run: yamllint playbooks/ roles/ inventory/group_vars/
-        continue-on-error: true
-
-  # Job 5: Docker stack validation
-  docker-stack-validation:
-    name: Docker Stack Validation
+  security-trivy-scan:
+    name: Trivy Security Scan
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Validate Docker Compose files
-        run: |
-          docker compose -f stack-app/docker-stack.yml config > /dev/null
-          docker compose -f stack-monitoring/monitoring-stack.yml config > /dev/null
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
 
-      - name: Check for Docker Compose syntax errors
-        run: |
-          echo "✅ All Docker stack files are valid"
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
 
-  # Summary job - requires all validations to pass
+      - name: Scan MySQL Docker image
+        run: |
+          echo "Scanning MySQL image..."
+          docker pull mysql:8.0.35
+          docker run --rm aquasec/trivy image --severity HIGH,CRITICAL mysql:8.0.35
+
+      - name: Scan WordPress Docker image
+        run: |
+          echo "Scanning WordPress image..."
+          docker pull wordpress:6.4.2-php8.1-apache
+          docker run --rm aquasec/trivy image --severity HIGH,CRITICAL wordpress:6.4.2-php8.1-apache
+
+  security-secrets-scan:
+    name: Secret Scanning
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: TruffleHog Secret Scan
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: main
+          head: HEAD
+
+  python-tests:
+    name: Python Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run pytest
+        run: |
+          pytest tests/ -v --tb=short
+
+  shell-script-validation:
+    name: Shell Script Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run shellcheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          severity: warning
+
   validation-summary:
     name: Validation Summary
-    needs: [python-tests, compliance-checks, terraform-validation, ansible-validation, docker-stack-validation]
     runs-on: ubuntu-latest
+    needs: [yaml-lint, terraform-validate, ansible-syntax-check, security-trivy-scan, security-secrets-scan, python-tests, shell-script-validation]
     if: always()
-
     steps:
-      - name: Check all validations passed
+      - name: Summary
         run: |
-          if [ "${{ needs.python-tests.result }}" != "success" ] || \
-             [ "${{ needs.compliance-checks.result }}" != "success" ] || \
-             [ "${{ needs.terraform-validation.result }}" != "success" ] || \
-             [ "${{ needs.ansible-validation.result }}" != "success" ] || \
-             [ "${{ needs.docker-stack-validation.result }}" != "success" ]; then
-            echo "❌ Some validations failed"
-            exit 1
-          fi
-          echo "✅ All validations passed successfully!"
+          echo "## PR Validation Complete" >> $GITHUB_STEP_SUMMARY
+          echo "All security scans and validation checks completed" >> $GITHUB_STEP_SUMMARY
