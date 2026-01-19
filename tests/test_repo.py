@@ -96,14 +96,14 @@ def test_workflows_exist():
         assert Path(workflow).exists(), f"Workflow {workflow} is missing"
 
 
-def test_security_files_exist():
-    """Verify security documentation exists."""
-    security_files = [
-        "SECURITY.md",
-        "CHANGES.md"
-    ]
-    for file in security_files:
-        assert Path(file).exists(), f"Security file {file} is missing"
+def test_readme_has_security_section():
+    """Verify README contains security documentation."""
+    with open("README.md") as f:
+        content = f.read()
+        assert "## Security Policy" in content, "README missing Security Policy section"
+        assert "## Changelog" in content, "README missing Changelog section"
+        assert "Reporting a Vulnerability" in content, "README missing vulnerability reporting"
+        assert "Version 2.0.0" in content, "README missing version 2.0.0 changelog"
 
 
 def test_wordpress_replicas():
