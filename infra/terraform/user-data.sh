@@ -1,8 +1,10 @@
 #!/bin/bash
 # Instance initialization script
+# shellcheck disable=SC2154
+# Note: hostname variable is provided by Terraform templatefile()
 
 # Set hostname
-hostnamectl set-hostname ${hostname}
+hostnamectl set-hostname "${hostname}"
 
 # Update system packages
 apt-get update
