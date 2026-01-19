@@ -31,14 +31,13 @@ variable "availability_zones" {
 variable "allowed_ssh_cidrs" {
   description = "CIDR blocks allowed to SSH to instances"
   type        = list(string)
-  default     = ["0.0.0.0/0"] # SECURITY: Restrict this in production!
+  # SECURITY WARNING: Default restricts SSH to common VPN/office ranges
+  # Update terraform.tfvars with YOUR specific IP addresses or VPN CIDR
+  # Examples: ["203.0.113.0/24"] for office network or ["203.0.113.42/32"] for single IP
+  # NEVER use 0.0.0.0/0 in production - this allows SSH from anywhere!
+  default     = ["10.0.0.0/8"]  # Only allow from private VPC by default
 }
 
-variable "allowed_monitoring_cidrs" {
-  description = "CIDR blocks allowed to access monitoring services"
-  type        = list(string)
-  default     = ["0.0.0.0/0"] # SECURITY: Restrict this in production!
-}
 
 variable "manager_instance_type" {
   description = "EC2 instance type for Swarm manager"

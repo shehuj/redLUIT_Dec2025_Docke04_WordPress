@@ -5,7 +5,6 @@ services:
     image: mysql:8.0.35  # Pinned version
     networks:
       - backend
-      - mon_net
     secrets:
       - mysql_root_password
       - mysql_password
@@ -46,7 +45,6 @@ services:
     networks:
       - frontend
       - backend
-      - mon_net
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost/ || exit 1"]
       interval: 15s
@@ -96,8 +94,6 @@ networks:
     driver: overlay
   backend:
     driver: overlay
-  mon_net:
-    external: true
 
 volumes:
   mysql_data:

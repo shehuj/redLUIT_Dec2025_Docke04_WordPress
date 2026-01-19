@@ -5,8 +5,11 @@
 set -e
 
 # Configuration
-BUCKET_NAME="ec2-shutdown-lambda-bucket"
-DYNAMODB_TABLE="dyning_table"
+# IMPORTANT: S3 bucket names must be globally unique across ALL AWS accounts
+# Update this to include your company/project name to ensure uniqueness
+# Example: "acme-wordpress-swarm-terraform-state"
+BUCKET_NAME="wordpress-swarm-terraform-state"
+DYNAMODB_TABLE="wordpress-swarm-terraform-lock"
 AWS_REGION="us-east-1"
 
 echo "🚀 Setting up Terraform backend infrastructure..."

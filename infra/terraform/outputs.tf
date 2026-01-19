@@ -67,3 +67,39 @@ output "ansible_inventory" {
     worker_ips = aws_instance.swarm_worker[*].public_ip
   })
 }
+
+# Convenience outputs for WordPress access
+output "wordpress_url" {
+  description = "WordPress application URL"
+  value       = "http://${aws_instance.swarm_manager.public_ip}"
+}
+
+output "ssh_connection_manager" {
+  description = "SSH command to connect to manager"
+  value       = "ssh -i swarm-key.pem ubuntu@${aws_instance.swarm_manager.public_ip}"
+}
+
+output "deployment_summary" {
+  description = "Quick deployment summary"
+  value = <<-EOT
+    ╔════════════════════════════════════════════════════════════════╗
+    ║          WordPress Swarm Deployment Summary                    ║
+    ╠════════════════════════════════════════════════════════════════╣
+    ║ WordPress URL: http://${aws_instance.swarm_manager.public_ip}
+    ║ Manager IP:    ${aws_instance.swarm_manager.public_ip}
+    ║ Worker Count:  ${length(aws_instance.swarm_worker)}
+    ║ VPC CIDR:      ${aws_vpc.main.cidr_block}
+    ║                                                                ║
+    ║ SSH Access:                                                    ║
+    ║   terraform output -raw private_key > swarm-key.pem            ║
+    ║   chmod 600 swarm-key.pem                                      ║
+    ║   ssh -i swarm-key.pem ubuntu@${aws_instance.swarm_manager.public_ip}
+    ║                                                                ║
+    ║ Next Steps:                                                    ║
+    ║   1. Access WordPress at the URL above                         ║
+    ║   2. Complete WordPress installation wizard                    ║
+    ║   3. Install security plugins                                  ║
+    ║   4. Configure backups                                         ║
+    ╚════════════════════════════════════════════════════════════════╝
+  EOT
+}

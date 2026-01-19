@@ -94,19 +94,94 @@
     - '80'
     - '443'
 
-- name: Configure UFW firewall - Allow monitoring ports
-  ufw:
-    rule: allow
-    port: "{{ item }}"
-    proto: tcp
-  loop:
-    - '3000'  # Grafana
-    - '9090'  # Prometheus
-    - '9093'  # AlertManager
-
 - name: Enable UFW
   ufw:
     state: enabled
   notify:
     - reload ufw
     - restart docker
+
+# fail2ban installation and configuration
+- name: Install fail2ban
+  apt:
+    name: fail2ban
+    state: present
+    update_cache: yes
+
+- name: Create fail2ban local configuration directory
+  file:
+    path: /etc/fail2ban/filter.d
+    state: directory
+    mode: '0755'
+
+- name: Configure fail2ban for SSH protection
+  copy:
+    dest: /etc/fail2ban/jail.local
+    content: |
+      [DEFAULT]
+      # Ban hosts for 1 hour after 5 failed attempts within 10 minutes
+      bantime  = 3600
+      findtime  = 600
+      maxretry = 5
+
+      # Email notifications (optional - configure with your email)
+      destemail = root@localhost
+      sendername = Fail2Ban
+      action = %(action_mw)s
+
+      [sshd]
+      enabled = true
+      port    = 22
+      filter  = sshd
+      logpath = /var/log/auth.log
+      maxretry = 3
+      bantime  = 7200
+
+      [sshd-ddos]
+      enabled = true
+      port    = 22
+      filter  = sshd-ddos
+      logpath = /var/log/auth.log
+      maxretry = 2
+      bantime  = 7200
+    mode: '0644'
+  notify: restart fail2ban
+
+- name: Create WordPress fail2ban filter
+  copy:
+    dest: /etc/fail2ban/filter.d/wordpress.conf
+    content: |
+      [Definition]
+      # Block WordPress brute force attacks
+      failregex = ^<HOST> .* "POST /wp-login.php
+                  ^<HOST> .* "POST /xmlrpc.php
+      ignoreregex =
+    mode: '0644'
+  notify: restart fail2ban
+
+- name: Configure fail2ban WordPress jail
+  blockinfile:
+    path: /etc/fail2ban/jail.local
+    marker: "# {mark} WORDPRESS PROTECTION"
+    block: |
+
+      [wordpress]
+      enabled = true
+      port    = 80,443
+      filter  = wordpress
+      logpath = /var/log/nginx/access.log
+      maxretry = 5
+      bantime  = 3600
+    create: yes
+  notify: restart fail2ban
+
+- name: Enable and start fail2ban service
+  systemd:
+    name: fail2ban
+    enabled: yes
+    state: started
+
+- name: Verify fail2ban is running
+  systemd:
+    name: fail2ban
+    state: started
