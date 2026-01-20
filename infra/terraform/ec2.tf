@@ -48,6 +48,7 @@ resource "aws_instance" "swarm_worker" {
     encrypted             = true
   }
 
+  
   user_data = templatefile("${path.module}/user-data.sh", {
     hostname = "swarm-worker-${count.index + 1}"
   })

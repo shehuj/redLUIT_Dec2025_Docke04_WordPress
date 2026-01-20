@@ -1,24 +1,31 @@
 #!/bin/bash
-# Instance initialization script
-# shellcheck disable=SC2154
-# Note: hostname variable is provided by Terraform templatefile()
+# User data script for EC2 instance initialization
+# This runs once at instance launch before Ansible configuration
 
+set -e
+
+# shellcheck disable=SC2154
+# hostname is a Terraform template variable substituted at deployment time
 # Set hostname
 hostnamectl set-hostname "${hostname}"
+echo "127.0.0.1 ${hostname}" >> /etc/hosts
 
 # Update system packages
 apt-get update
+apt-get upgrade -y
 
-# Install Python3 for Ansible
+# Install Python for Ansible (if not present)
 apt-get install -y python3 python3-pip
 
-# Create ubuntu user if it doesn't exist (should already exist on Ubuntu AMI)
-if ! id -u ubuntu >/dev/null 2>&1; then
-    useradd -m -s /bin/bash ubuntu
-    usermod -aG sudo ubuntu
-fi
+# Install required packages
+apt-get install -y \
+    apt-transport-https \
+    ca-certificates \
+    curl \
+    gnupg \
+    lsb-release \
+    software-properties-common
 
-# Ensure SSH directory exists for ubuntu user
-mkdir -p /home/ubuntu/.ssh
-chown ubuntu:ubuntu /home/ubuntu/.ssh
-chmod 700 /home/ubuntu/.ssh
+# Signal completion
+touch /var/log/user-data-complete.log
+echo "User data script completed at $(date)" >> /var/log/user-data-complete.log
