@@ -59,13 +59,13 @@ jobs:
         id: terraform-output
         if: github.event.inputs.action != 'destroy'
         run: |
-          echo "manager_ip=$(terraform output -raw manager_public_ip)" >> $GITHUB_OUTPUT
-          echo "worker_ips=$(terraform output -json worker_public_ips)" >> $GITHUB_OUTPUT
+          echo "manager_ip=$(terraform output -raw swarm_manager_public_ip)" >> $GITHUB_OUTPUT
+          echo "worker_ips=$(terraform output -json swarm_worker_public_ips)" >> $GITHUB_OUTPUT
 
       - name: Save SSH Key
         if: github.event.inputs.action != 'destroy'
         run: |
-          terraform output -raw private_key > swarm-key.pem
+          terraform output -raw private_key_pem > swarm-key.pem
           chmod 600 swarm-key.pem
 
       - name: Upload SSH Key
