@@ -104,7 +104,7 @@ output "deployment_summary" {
   EOT
 }
 
-
+/*
 # Public IP of the swarm manager
 output "swarm_manager_public_ip" {
   description = "Public IP of the Swarm manager"
@@ -140,3 +140,4 @@ output "swarm_instance_ids" {
   description = "All Swarm instance IDs"
   value       = concat([aws_instance.swarm_manager.id], aws_instance.swarm_worker[*].id)
 }
+*/
