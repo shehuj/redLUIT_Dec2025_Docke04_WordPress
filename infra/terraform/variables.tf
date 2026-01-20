@@ -54,7 +54,7 @@ variable "worker_instance_type" {
 variable "worker_count" {
   description = "Number of Swarm worker nodes"
   type        = number
-  default     = 2
+  default     = 3
 }
 
 variable "manager_root_volume_size" {
