@@ -4,8 +4,10 @@
 
 set -e
 
+# shellcheck disable=SC2154
+# hostname is a Terraform template variable substituted at deployment time
 # Set hostname
-hostnamectl set-hostname ${hostname}
+hostnamectl set-hostname "${hostname}"
 echo "127.0.0.1 ${hostname}" >> /etc/hosts
 
 # Update system packages

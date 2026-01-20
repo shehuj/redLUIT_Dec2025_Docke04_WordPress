@@ -15,7 +15,7 @@ resource "aws_instance" "swarm_manager" {
     encrypted             = true
   }
 
-  user_data = templatefile("${path.module}/user-data.sh", {
+  user_data = templatefile("infra/terraform/user-data.sh", {
     hostname = "swarm-manager-1"
   })
 
@@ -48,7 +48,8 @@ resource "aws_instance" "swarm_worker" {
     encrypted             = true
   }
 
-  user_data = templatefile("${path.module}/user-data.sh", {
+  
+  r_data = templatefile("infra/terraform/user-data.sh", {
     hostname = "swarm-worker-${count.index + 1}"
   })
 
