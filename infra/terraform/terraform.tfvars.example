@@ -1,0 +1,32 @@
+# Example Terraform Variables Configuration
+# Copy this file to terraform.tfvars and customize values for your deployment
+# Command: cp terraform.tfvars.example terraform.tfvars
+
+# AWS Configuration
+aws_region = "us-east-1"
+
+# Environment Configuration
+environment  = "production"
+project_name = "wordpress-swarm"
+
+# Network Configuration
+vpc_cidr           = "10.0.0.0/16"
+availability_zones = ["us-east-1a", "us-east-1b"]
+
+# Security Configuration
+# IMPORTANT: Replace with your actual IP address or VPN CIDR
+# Examples:
+#   - Single IP: ["203.0.113.42/32"]
+#   - Office network: ["203.0.113.0/24"]
+#   - Multiple IPs: ["203.0.113.42/32", "198.51.100.0/24"]
+# WARNING: Never use ["0.0.0.0/0"] in production - this allows SSH from anywhere!
+allowed_ssh_cidrs = ["YOUR_IP_ADDRESS/32"]
+
+# EC2 Instance Configuration
+manager_instance_type = "t3.medium"
+worker_instance_type  = "t3.medium"
+worker_count          = 3
+
+# Storage Configuration
+manager_root_volume_size = 30
+worker_root_volume_size  = 30
