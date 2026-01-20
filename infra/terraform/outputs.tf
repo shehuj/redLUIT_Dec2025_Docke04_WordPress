@@ -103,3 +103,40 @@ output "deployment_summary" {
     ╚════════════════════════════════════════════════════════════════╝
   EOT
 }
+
+
+# Public IP of the swarm manager
+output "swarm_manager_public_ip" {
+  description = "Public IP of the Swarm manager"
+  value       = aws_instance.swarm_manager.public_ip
+}
+
+# Private IP of the swarm manager
+output "swarm_manager_private_ip" {
+  description = "Private IP of the Swarm manager"
+  value       = aws_instance.swarm_manager.private_ip
+}
+
+# All worker public IPs (list)
+output "swarm_worker_public_ips" {
+  description = "Public IPs of all Swarm workers"
+  value       = aws_instance.swarm_worker[*].public_ip
+}
+
+# All worker private IPs (list)
+output "swarm_worker_private_ips" {
+  description = "Private IPs of all Swarm workers"
+  value       = aws_instance.swarm_worker[*].private_ip
+}
+
+# Ansible inventory string (already in your logs)
+output "ansible_inventory" {
+  description = "Generated Ansible inventory"
+  value       = local.ansible_inventory
+}
+
+# (Optional) Combined instance IDs
+output "swarm_instance_ids" {
+  description = "All Swarm instance IDs"
+  value       = concat([aws_instance.swarm_manager.id], aws_instance.swarm_worker[*].id)
+}
