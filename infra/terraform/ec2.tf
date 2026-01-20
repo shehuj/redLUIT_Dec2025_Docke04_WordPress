@@ -49,7 +49,7 @@ resource "aws_instance" "swarm_worker" {
   }
 
   
-  r_data = templatefile("${path.module}/user-data.sh", {
+  user_data = templatefile("${path.module}/user-data.sh", {
     hostname = "swarm-worker-${count.index + 1}"
   })
 
