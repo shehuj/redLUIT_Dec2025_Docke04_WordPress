@@ -18,10 +18,9 @@ output "swarm_manager_public_ip" {
   value       = aws_instance.swarm_manager.public_ip
 }
 
-output "private_key_pem" {
-  description = "Private key in PEM format for SSH access"
-  value       = tls_private_key.swarm_key.private_key_pem
-  sensitive   = true
+output "ssh_key_name" {
+  description = "Name of the SSH key pair used for EC2 instances"
+  value       = data.aws_key_pair.swarm_key.key_name
 }
 
 output "swarm_manager_private_ip" {
@@ -76,7 +75,7 @@ output "wordpress_url" {
 
 output "ssh_connection_manager" {
   description = "SSH command to connect to manager"
-  value       = "ssh -i swarm-key.pem ubuntu@${aws_instance.swarm_manager.public_ip}"
+  value       = "ssh -i <path-to-your-key.pem> ubuntu@${aws_instance.swarm_manager.public_ip}"
 }
 
 output "deployment_summary" {
@@ -86,20 +85,21 @@ output "deployment_summary" {
     ║          WordPress Swarm Deployment Summary                    ║
     ╠════════════════════════════════════════════════════════════════╣
     ║ WordPress URL: http://${aws_instance.swarm_manager.public_ip}
+    ║ Portainer UI:  https://${aws_instance.swarm_manager.public_ip}:9443
     ║ Manager IP:    ${aws_instance.swarm_manager.public_ip}
     ║ Worker Count:  ${length(aws_instance.swarm_worker)}
     ║ VPC CIDR:      ${aws_vpc.main.cidr_block}
+    ║ SSH Key:       ${data.aws_key_pair.swarm_key.key_name}
     ║                                                                ║
     ║ SSH Access:                                                    ║
-    ║   terraform output -raw private_key > swarm-key.pem            ║
-    ║   chmod 600 swarm-key.pem                                      ║
-    ║   ssh -i swarm-key.pem ubuntu@${aws_instance.swarm_manager.public_ip}
+    ║   ssh -i <your-key.pem> ubuntu@${aws_instance.swarm_manager.public_ip}
     ║                                                                ║
     ║ Next Steps:                                                    ║
     ║   1. Access WordPress at the URL above                         ║
-    ║   2. Complete WordPress installation wizard                    ║
-    ║   3. Install security plugins                                  ║
-    ║   4. Configure backups                                         ║
+    ║   2. Access Portainer at the URL above (create admin account)  ║
+    ║   3. Complete WordPress installation wizard                    ║
+    ║   4. Install security plugins                                  ║
+    ║   5. Configure backups                                         ║
     ╚════════════════════════════════════════════════════════════════╝
   EOT
 }
