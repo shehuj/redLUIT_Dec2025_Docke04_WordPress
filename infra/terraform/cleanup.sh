@@ -105,16 +105,16 @@ destroy_terraform() {
     echo -e "${GREEN}✅ Terraform infrastructure destroyed${NC}"
 }
 
-# Function to cleanup Terraform backend
+# Function to clear Terraform backend contents
 cleanup_backend() {
-    echo -e "${YELLOW}🗄️  Cleaning up Terraform backend...${NC}"
+    echo -e "${YELLOW}🗄️  Clearing Terraform backend contents...${NC}"
 
-    # Check if bucket exists and delete
+    # Check if bucket exists and empty it
     if aws s3api head-bucket --bucket "$BACKEND_BUCKET" --region "$AWS_REGION" 2>/dev/null; then
         echo "   Emptying S3 bucket: $BACKEND_BUCKET"
         aws s3 rm "s3://$BACKEND_BUCKET" --recursive --region "$AWS_REGION"
 
-        echo "   Deleting all versions..."
+        echo "   Deleting all object versions..."
         aws s3api delete-objects \
             --bucket "$BACKEND_BUCKET" \
             --delete "$(aws s3api list-object-versions \
@@ -124,26 +124,45 @@ cleanup_backend() {
                 --query='{Objects: Versions[].{Key:Key,VersionId:VersionId}}')" \
             2>/dev/null || true
 
-        echo "   Deleting bucket: $BACKEND_BUCKET"
-        aws s3api delete-bucket --bucket "$BACKEND_BUCKET" --region "$AWS_REGION"
-        echo -e "${GREEN}   ✅ S3 bucket deleted${NC}"
+        echo "   Deleting delete markers..."
+        aws s3api delete-objects \
+            --bucket "$BACKEND_BUCKET" \
+            --delete "$(aws s3api list-object-versions \
+                --bucket "$BACKEND_BUCKET" \
+                --output=json \
+                --region "$AWS_REGION" \
+                --query='{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}')" \
+            2>/dev/null || true
+
+        echo -e "${GREEN}   ✅ S3 bucket emptied (bucket preserved)${NC}"
     else
         echo -e "${YELLOW}   ⚠️  S3 bucket not found${NC}"
     fi
 
-    # Check if table exists and delete
+    # Check if table exists and clear items
     if aws dynamodb describe-table --table-name "$BACKEND_TABLE" --region "$AWS_REGION" 2>/dev/null; then
-        echo "   Deleting DynamoDB table: $BACKEND_TABLE"
-        aws dynamodb delete-table --table-name "$BACKEND_TABLE" --region "$AWS_REGION"
+        echo "   Clearing DynamoDB table items: $BACKEND_TABLE"
 
-        echo "   Waiting for table deletion..."
-        aws dynamodb wait table-not-exists --table-name "$BACKEND_TABLE" --region "$AWS_REGION"
-        echo -e "${GREEN}   ✅ DynamoDB table deleted${NC}"
+        # Scan and delete all items
+        aws dynamodb scan --table-name "$BACKEND_TABLE" --region "$AWS_REGION" \
+            --attributes-to-get "LockID" --output json | \
+            jq -r '.Items[] | .LockID.S' 2>/dev/null | \
+            while read -r lock_id; do
+                if [ -n "$lock_id" ]; then
+                    echo "   Deleting lock: $lock_id"
+                    aws dynamodb delete-item \
+                        --table-name "$BACKEND_TABLE" \
+                        --key "{\"LockID\": {\"S\": \"$lock_id\"}}" \
+                        --region "$AWS_REGION" 2>/dev/null || true
+                fi
+            done
+
+        echo -e "${GREEN}   ✅ DynamoDB table cleared (table preserved)${NC}"
     else
         echo -e "${YELLOW}   ⚠️  DynamoDB table not found${NC}"
     fi
 
-    echo -e "${GREEN}✅ Backend cleanup complete${NC}"
+    echo -e "${GREEN}✅ Backend contents cleared (infrastructure preserved)${NC}"
 }
 
 # Main cleanup flow
@@ -151,7 +170,7 @@ main() {
     echo "This script will:"
     echo "  1. Clean up Docker resources (stacks, services, volumes)"
     echo "  2. Destroy all Terraform-managed infrastructure"
-    echo "  3. Optionally delete Terraform backend (S3 + DynamoDB)"
+    echo "  3. Optionally clear Terraform backend contents (S3 + DynamoDB)"
     echo ""
 
     # First confirmation
@@ -182,9 +201,9 @@ main() {
 
     # Step 3: Backend cleanup
     echo ""
-    echo -e "${YELLOW}⚠️  WARNING: Deleting the backend will remove Terraform state!${NC}"
-    echo "   You will not be able to manage these resources with Terraform anymore."
-    read -p "Delete Terraform backend (S3 + DynamoDB)? (y/n): " response
+    echo -e "${YELLOW}ℹ️  Backend cleanup will empty S3 bucket and clear DynamoDB items${NC}"
+    echo "   The bucket and table will be preserved for future use."
+    read -p "Clear Terraform backend contents (S3 + DynamoDB)? (y/n): " response
     if [ "$response" = "y" ]; then
         cleanup_backend
     else

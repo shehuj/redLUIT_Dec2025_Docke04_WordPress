@@ -13,10 +13,10 @@ on:
         type: boolean
         default: true
       cleanup_backend:
-        description: 'Also delete Terraform state backend (S3 bucket and DynamoDB table)'
+        description: 'Clear Terraform state backend contents (empty S3 bucket and DynamoDB table)'
         required: true
         type: boolean
-        default: false
+        default: true
 
 env:
   AWS_REGION: us-east-1
@@ -46,7 +46,8 @@ jobs:
           echo "- Security Groups" >> $GITHUB_STEP_SUMMARY
           echo "- All Docker Swarm services and volumes" >> $GITHUB_STEP_SUMMARY
           if [ "${{ github.event.inputs.cleanup_backend }}" == "true" ]; then
-            echo "- ⚠️ Terraform Backend (S3 bucket and DynamoDB table)" >> $GITHUB_STEP_SUMMARY
+            echo "- Terraform state files (S3 bucket contents cleared)" >> $GITHUB_STEP_SUMMARY
+            echo "- Terraform locks (DynamoDB table cleared)" >> $GITHUB_STEP_SUMMARY
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**This action cannot be undone!**" >> $GITHUB_STEP_SUMMARY
@@ -163,7 +164,7 @@ jobs:
           fi
 
   cleanup-backend:
-    name: Cleanup Terraform Backend
+    name: Clear Terraform Backend Contents
     runs-on: ubuntu-latest
     needs: terraform-destroy
     if: github.event.inputs.cleanup_backend == 'true' && needs.terraform-destroy.result == 'success'
@@ -178,7 +179,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Delete S3 State Bucket
+      - name: Empty S3 State Bucket
         run: |
           BUCKET_NAME="ec2-shutdown-lambda-bucket"
 
@@ -187,7 +188,7 @@ jobs:
             echo "Emptying S3 bucket: $BUCKET_NAME"
             aws s3 rm "s3://$BUCKET_NAME" --recursive
 
-            echo "Deleting all versions..."
+            echo "Deleting all object versions..."
             aws s3api delete-objects \
               --bucket "$BUCKET_NAME" \
               --delete "$(aws s3api list-object-versions \
@@ -196,26 +197,42 @@ jobs:
                 --query='{Objects: Versions[].{Key:Key,VersionId:VersionId}}')" \
               2>/dev/null || true
 
-            echo "Deleting bucket: $BUCKET_NAME"
-            aws s3api delete-bucket --bucket "$BUCKET_NAME" --region ${{ env.AWS_REGION }}
-            echo "✅ S3 bucket deleted" >> $GITHUB_STEP_SUMMARY
+            echo "Deleting delete markers..."
+            aws s3api delete-objects \
+              --bucket "$BUCKET_NAME" \
+              --delete "$(aws s3api list-object-versions \
+                --bucket "$BUCKET_NAME" \
+                --output=json \
+                --query='{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}')" \
+              2>/dev/null || true
+
+            echo "✅ S3 bucket emptied (bucket preserved)" >> $GITHUB_STEP_SUMMARY
           else
             echo "Bucket does not exist, skipping"
             echo "ℹ️ S3 bucket not found" >> $GITHUB_STEP_SUMMARY
           fi
 
-      - name: Delete DynamoDB Lock Table
+      - name: Clear DynamoDB Lock Table
         run: |
           TABLE_NAME="dyning_table"
 
           echo "Checking if table exists..."
           if aws dynamodb describe-table --table-name "$TABLE_NAME" --region ${{ env.AWS_REGION }} 2>/dev/null; then
-            echo "Deleting DynamoDB table: $TABLE_NAME"
-            aws dynamodb delete-table --table-name "$TABLE_NAME" --region ${{ env.AWS_REGION }}
+            echo "Clearing DynamoDB table items: $TABLE_NAME"
 
-            echo "Waiting for table deletion..."
-            aws dynamodb wait table-not-exists --table-name "$TABLE_NAME" --region ${{ env.AWS_REGION }}
-            echo "✅ DynamoDB table deleted" >> $GITHUB_STEP_SUMMARY
+            # Scan and delete all items
+            aws dynamodb scan --table-name "$TABLE_NAME" --region ${{ env.AWS_REGION }} \
+              --attributes-to-get "LockID" --output json | \
+              jq -r '.Items[] | .LockID.S' | \
+              while read -r lock_id; do
+                echo "Deleting lock: $lock_id"
+                aws dynamodb delete-item \
+                  --table-name "$TABLE_NAME" \
+                  --key "{\"LockID\": {\"S\": \"$lock_id\"}}" \
+                  --region ${{ env.AWS_REGION }} 2>/dev/null || true
+              done
+
+            echo "✅ DynamoDB table cleared (table preserved)" >> $GITHUB_STEP_SUMMARY
           else
             echo "Table does not exist, skipping"
             echo "ℹ️ DynamoDB table not found" >> $GITHUB_STEP_SUMMARY

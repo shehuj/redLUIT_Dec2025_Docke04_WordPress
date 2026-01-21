@@ -11,7 +11,7 @@ This guide explains how to safely destroy all provisioned AWS resources for the 
 - Docker volumes and data
 - WordPress content and database
 - Portainer configuration
-- Optionally: Terraform state backend
+- Terraform state files (backend bucket/table preserved but emptied)
 
 **Always backup important data before proceeding!**
 
@@ -34,7 +34,7 @@ The GitHub Actions workflow provides a safe, audited cleanup process with confir
    - Configure options:
      - **Confirm destroy**: Type `destroy` exactly
      - **Cleanup Docker**: `true` (removes Docker stacks/volumes first)
-     - **Cleanup backend**: `false` (keep Terraform state for future use)
+     - **Cleanup backend**: `true` (clears state files, keeps bucket/table)
 
 3. **Monitor Progress**
    - Watch the workflow execution
@@ -73,9 +73,10 @@ graph TD
 - ✓ All images and containers
 
 **If Cleanup Backend = true:**
-- ✓ S3 state bucket
-- ✓ DynamoDB lock table
-- ⚠️ Terraform state files (cannot manage resources afterward)
+- ✓ S3 bucket contents (all state files and versions)
+- ✓ DynamoDB table items (all lock entries)
+- ℹ️ S3 bucket and DynamoDB table are preserved for reuse
+- ℹ️ You can redeploy immediately without recreating backend
 
 ---
 
@@ -155,14 +156,28 @@ For advanced users who want direct control.
    - Review the destroy plan
    - Type `yes` to confirm
 
-4. **Cleanup backend** (optional)
+4. **Clear backend contents** (optional)
    ```bash
-   # Delete S3 bucket
+   # Empty S3 bucket (preserves bucket)
    aws s3 rm s3://ec2-shutdown-lambda-bucket --recursive
-   aws s3api delete-bucket --bucket ec2-shutdown-lambda-bucket
 
-   # Delete DynamoDB table
-   aws dynamodb delete-table --table-name dyning_table
+   # Delete all versions
+   aws s3api delete-objects \
+     --bucket ec2-shutdown-lambda-bucket \
+     --delete "$(aws s3api list-object-versions \
+       --bucket ec2-shutdown-lambda-bucket \
+       --output json \
+       --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}')"
+
+   # Clear DynamoDB table items (preserves table)
+   aws dynamodb scan --table-name dyning_table \
+     --attributes-to-get "LockID" --output json | \
+     jq -r '.Items[] | .LockID.S' | \
+     while read -r lock_id; do
+       aws dynamodb delete-item \
+         --table-name dyning_table \
+         --key "{\"LockID\": {\"S\": \"$lock_id\"}}"
+     done
    ```
 
 ---
@@ -224,16 +239,16 @@ terraform destroy  # Destroy remaining resources
 # Docker resources will be deleted when EC2 instances are terminated
 ```
 
-### Issue: S3 bucket not empty
+### Issue: S3 bucket still has objects
 
-**Problem:** Cannot delete bucket with objects
+**Problem:** Bucket not fully emptied
 
 **Solution:**
 ```bash
-# Empty bucket first
+# Empty all current objects
 aws s3 rm s3://ec2-shutdown-lambda-bucket --recursive
 
-# Delete all versions
+# Delete all object versions
 aws s3api delete-objects \
   --bucket ec2-shutdown-lambda-bucket \
   --delete "$(aws s3api list-object-versions \
@@ -241,8 +256,16 @@ aws s3api delete-objects \
     --output json \
     --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}')"
 
-# Delete bucket
-aws s3api delete-bucket --bucket ec2-shutdown-lambda-bucket
+# Delete all delete markers
+aws s3api delete-objects \
+  --bucket ec2-shutdown-lambda-bucket \
+  --delete "$(aws s3api list-object-versions \
+    --bucket ec2-shutdown-lambda-bucket \
+    --output json \
+    --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}')"
+
+# Verify bucket is empty
+aws s3 ls s3://ec2-shutdown-lambda-bucket
 ```
 
 ### Issue: State lock error
@@ -321,16 +344,16 @@ aws dynamodb delete-item \
 
 ### To Redeploy After Cleanup:
 
-If backend was **NOT** deleted:
+Since backend bucket and table are preserved:
 ```bash
-# Just redeploy
+# Just redeploy - no backend recreation needed
 git push origin main
-# Workflow will recreate infrastructure
+# Workflow will recreate infrastructure using existing backend
 ```
 
-If backend **WAS** deleted:
+If you need to recreate backend (advanced):
 ```bash
-# Recreate backend first
+# Only if you manually deleted the bucket/table
 cd infra/terraform
 ./setup-backend.sh
 
