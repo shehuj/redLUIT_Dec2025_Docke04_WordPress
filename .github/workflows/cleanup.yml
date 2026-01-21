@@ -1,0 +1,250 @@
+name: Cleanup Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_destroy:
+        description: 'Type "destroy" to confirm deletion of all resources'
+        required: true
+        type: string
+      cleanup_docker:
+        description: 'Remove Docker stacks and volumes before destroying infrastructure'
+        required: true
+        type: boolean
+        default: true
+      cleanup_backend:
+        description: 'Also delete Terraform state backend (S3 bucket and DynamoDB table)'
+        required: true
+        type: boolean
+        default: false
+
+env:
+  AWS_REGION: us-east-1
+  TERRAFORM_VERSION: 1.6.0
+
+jobs:
+  validate-confirmation:
+    name: Validate Destroy Confirmation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check confirmation input
+        run: |
+          if [ "${{ github.event.inputs.confirm_destroy }}" != "destroy" ]; then
+            echo "❌ Confirmation failed. You must type 'destroy' to proceed."
+            echo "You entered: ${{ github.event.inputs.confirm_destroy }}"
+            exit 1
+          fi
+          echo "✅ Destroy confirmation validated"
+
+      - name: Display cleanup plan
+        run: |
+          echo "## Cleanup Plan" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The following resources will be destroyed:" >> $GITHUB_STEP_SUMMARY
+          echo "- EC2 Instances (Manager + Workers)" >> $GITHUB_STEP_SUMMARY
+          echo "- VPC and Networking components" >> $GITHUB_STEP_SUMMARY
+          echo "- Security Groups" >> $GITHUB_STEP_SUMMARY
+          echo "- All Docker Swarm services and volumes" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ github.event.inputs.cleanup_backend }}" == "true" ]; then
+            echo "- ⚠️ Terraform Backend (S3 bucket and DynamoDB table)" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**This action cannot be undone!**" >> $GITHUB_STEP_SUMMARY
+
+  docker-cleanup:
+    name: Clean Up Docker Resources
+    runs-on: ubuntu-latest
+    needs: validate-confirmation
+    if: github.event.inputs.cleanup_docker == 'true'
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Get Manager IP
+        id: manager
+        run: |
+          MANAGER_IP=$(terraform output -raw swarm_manager_public_ip 2>/dev/null || echo "")
+          if [ -z "$MANAGER_IP" ]; then
+            echo "No infrastructure found, skipping Docker cleanup"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "ip=$MANAGER_IP" >> $GITHUB_OUTPUT
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Save SSH Key
+        if: steps.manager.outputs.skip != 'true'
+        run: |
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > swarm-key.pem
+          chmod 600 swarm-key.pem
+
+      - name: Remove Docker Stacks
+        if: steps.manager.outputs.skip != 'true'
+        run: |
+          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i swarm-key.pem ubuntu@${{ steps.manager.outputs.ip }} << 'ENDSSH' || true
+            echo "Removing Docker stacks..."
+            docker stack rm wordpress 2>/dev/null || true
+            docker stack rm portainer 2>/dev/null || true
+
+            # Wait for services to stop
+            sleep 30
+
+            echo "Removing Docker services..."
+            docker service rm $(docker service ls -q) 2>/dev/null || true
+
+            echo "Pruning Docker system..."
+            docker system prune -af --volumes 2>/dev/null || true
+
+            echo "Docker cleanup complete"
+          ENDSSH
+
+      - name: Docker Cleanup Summary
+        if: steps.manager.outputs.skip != 'true'
+        run: |
+          echo "✅ Docker resources cleaned up on swarm cluster" >> $GITHUB_STEP_SUMMARY
+
+  terraform-destroy:
+    name: Destroy Terraform Infrastructure
+    runs-on: ubuntu-latest
+    needs: [validate-confirmation, docker-cleanup]
+    if: always() && needs.validate-confirmation.result == 'success'
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Destroy
+        run: terraform destroy -auto-approve
+        continue-on-error: false
+
+      - name: Verify Destruction
+        run: |
+          echo "Verifying all resources are destroyed..."
+          if terraform show -json | grep -q '"values"'; then
+            echo "⚠️ Warning: Some resources may still exist" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ All Terraform-managed resources destroyed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  cleanup-backend:
+    name: Cleanup Terraform Backend
+    runs-on: ubuntu-latest
+    needs: terraform-destroy
+    if: github.event.inputs.cleanup_backend == 'true' && needs.terraform-destroy.result == 'success'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Delete S3 State Bucket
+        run: |
+          BUCKET_NAME="ec2-shutdown-lambda-bucket"
+
+          echo "Checking if bucket exists..."
+          if aws s3api head-bucket --bucket "$BUCKET_NAME" 2>/dev/null; then
+            echo "Emptying S3 bucket: $BUCKET_NAME"
+            aws s3 rm "s3://$BUCKET_NAME" --recursive
+
+            echo "Deleting all versions..."
+            aws s3api delete-objects \
+              --bucket "$BUCKET_NAME" \
+              --delete "$(aws s3api list-object-versions \
+                --bucket "$BUCKET_NAME" \
+                --output=json \
+                --query='{Objects: Versions[].{Key:Key,VersionId:VersionId}}')" \
+              2>/dev/null || true
+
+            echo "Deleting bucket: $BUCKET_NAME"
+            aws s3api delete-bucket --bucket "$BUCKET_NAME" --region ${{ env.AWS_REGION }}
+            echo "✅ S3 bucket deleted" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Bucket does not exist, skipping"
+            echo "ℹ️ S3 bucket not found" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Delete DynamoDB Lock Table
+        run: |
+          TABLE_NAME="dyning_table"
+
+          echo "Checking if table exists..."
+          if aws dynamodb describe-table --table-name "$TABLE_NAME" --region ${{ env.AWS_REGION }} 2>/dev/null; then
+            echo "Deleting DynamoDB table: $TABLE_NAME"
+            aws dynamodb delete-table --table-name "$TABLE_NAME" --region ${{ env.AWS_REGION }}
+
+            echo "Waiting for table deletion..."
+            aws dynamodb wait table-not-exists --table-name "$TABLE_NAME" --region ${{ env.AWS_REGION }}
+            echo "✅ DynamoDB table deleted" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Table does not exist, skipping"
+            echo "ℹ️ DynamoDB table not found" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  cleanup-summary:
+    name: Cleanup Summary
+    runs-on: ubuntu-latest
+    needs: [validate-confirmation, docker-cleanup, terraform-destroy, cleanup-backend]
+    if: always()
+    steps:
+      - name: Generate Summary
+        run: |
+          echo "# 🧹 Infrastructure Cleanup Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Cleanup Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Component | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Validation | ${{ needs.validate-confirmation.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Docker Cleanup | ${{ needs.docker-cleanup.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Terraform Destroy | ${{ needs.terraform-destroy.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Backend Cleanup | ${{ needs.cleanup-backend.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.terraform-destroy.result }}" == "success" ]; then
+            echo "✅ **All infrastructure has been successfully destroyed**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ **Cleanup completed with warnings. Please check the logs.**" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Timestamp:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
