@@ -1,0 +1,110 @@
+---
+# Main tasks for swarm-tools role
+
+- name: Install Docker Compose
+  ansible.builtin.get_url:
+    url: "https://github.com/docker/compose/releases/download/v{{ docker_compose_version }}/docker-compose-linux-{{ ansible_architecture }}"
+    dest: "{{ docker_compose_install_path }}"
+    mode: '0755'
+    owner: root
+    group: root
+  register: compose_install
+  retries: 3
+  delay: 5
+  until: compose_install is succeeded
+
+- name: Create symbolic link for docker compose plugin
+  ansible.builtin.file:
+    src: "{{ docker_compose_install_path }}"
+    dest: "/usr/bin/docker-compose"
+    state: link
+    force: true
+
+- name: Verify Docker Compose installation
+  ansible.builtin.command: docker-compose --version
+  register: compose_version
+  changed_when: false
+  failed_when: compose_version.rc != 0
+
+- name: Display Docker Compose version
+  ansible.builtin.debug:
+    msg: "{{ compose_version.stdout }}"
+
+# Portainer deployment (only on manager nodes)
+- name: Deploy Portainer stack on Swarm manager
+  when:
+    - inventory_hostname in groups['swarm_managers']
+    - portainer_enabled | bool
+  block:
+    - name: Create Portainer data volume
+      community.docker.docker_volume:
+        name: "{{ portainer_data_volume }}"
+        driver: local
+
+    - name: Deploy Portainer agent service
+      community.docker.docker_swarm_service:
+        name: portainer_agent
+        image: "portainer/agent:{{ portainer_version }}"
+        mode: global
+        mounts:
+          - source: /var/run/docker.sock
+            target: /var/run/docker.sock
+            type: bind
+          - source: /var/lib/docker/volumes
+            target: /var/lib/docker/volumes
+            type: bind
+        networks:
+          - portainer_agent_network
+        env:
+          AGENT_PORT: "{{ portainer_agent_port }}"
+      register: agent_deploy
+
+    - name: Create Portainer agent network
+      community.docker.docker_network:
+        name: portainer_agent_network
+        driver: overlay
+        attachable: true
+
+    - name: Deploy Portainer server service
+      community.docker.docker_swarm_service:
+        name: portainer
+        image: "portainer/portainer-ce:{{ portainer_version }}"
+        publish:
+          - published_port: "{{ portainer_web_port }}"
+            target_port: 9443
+            protocol: tcp
+          - published_port: 9000
+            target_port: 9000
+            protocol: tcp
+          - published_port: 8000
+            target_port: 8000
+            protocol: tcp
+        mounts:
+          - source: "{{ portainer_data_volume }}"
+            target: /data
+            type: volume
+        networks:
+          - portainer_agent_network
+        replicas: 1
+        placement:
+          constraints:
+            - node.role == manager
+        restart_config:
+          condition: on-failure
+      register: portainer_deploy
+
+    - name: Wait for Portainer to be ready
+      ansible.builtin.wait_for:
+        host: "{{ ansible_default_ipv4.address }}"
+        port: "{{ portainer_web_port }}"
+        delay: 10
+        timeout: 120
+        state: started
+
+    - name: Display Portainer access information
+      ansible.builtin.debug:
+        msg:
+          - "Portainer has been deployed successfully!"
+          - "Access Portainer at: https://{{ ansible_default_ipv4.address }}:{{ portainer_web_port }}"
+          - "Note: You'll need to create an admin account on first access"
+          - "The certificate is self-signed, so you may see a security warning"

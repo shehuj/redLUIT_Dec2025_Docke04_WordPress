@@ -67,6 +67,33 @@ resource "aws_security_group" "swarm_manager" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  # Portainer web interface (HTTPS)
+  ingress {
+    description = "Portainer web UI (HTTPS)"
+    from_port   = 9443
+    to_port     = 9443
+    protocol    = "tcp"
+    cidr_blocks = var.allowed_ssh_cidrs
+  }
+
+  # Portainer web interface (HTTP - optional)
+  ingress {
+    description = "Portainer web UI (HTTP)"
+    from_port   = 9000
+    to_port     = 9000
+    protocol    = "tcp"
+    cidr_blocks = var.allowed_ssh_cidrs
+  }
+
+  # Portainer agent communication
+  ingress {
+    description = "Portainer agent"
+    from_port   = 9001
+    to_port     = 9001
+    protocol    = "tcp"
+    self        = true
+  }
+
   # Outbound traffic
   egress {
     description = "Allow all outbound"
@@ -233,4 +260,26 @@ resource "aws_security_group_rule" "worker_overlay_from_manager" {
   source_security_group_id = aws_security_group.swarm_manager.id
   security_group_id        = aws_security_group.swarm_worker.id
   description              = "Docker overlay network from manager"
+}
+
+# Allow workers to connect to Portainer agent on manager
+resource "aws_security_group_rule" "manager_portainer_agent_from_workers" {
+  type                     = "ingress"
+  from_port                = 9001
+  to_port                  = 9001
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.swarm_worker.id
+  security_group_id        = aws_security_group.swarm_manager.id
+  description              = "Portainer agent from workers"
+}
+
+# Allow manager to connect to Portainer agent on workers
+resource "aws_security_group_rule" "worker_portainer_agent_from_manager" {
+  type                     = "ingress"
+  from_port                = 9001
+  to_port                  = 9001
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.swarm_manager.id
+  security_group_id        = aws_security_group.swarm_worker.id
+  description              = "Portainer agent from manager"
 }

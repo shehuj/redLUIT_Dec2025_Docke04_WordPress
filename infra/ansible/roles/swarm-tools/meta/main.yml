@@ -1,0 +1,15 @@
+---
+galaxy_info:
+  author: WordPress Swarm Team
+  description: Install additional tools for Docker Swarm (Docker Compose, Portainer)
+  company: redLUIT
+  license: MIT
+  min_ansible_version: "2.9"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - focal
+        - jammy
+
+dependencies:
+  - role: docker-engine
