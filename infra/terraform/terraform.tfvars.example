@@ -30,3 +30,8 @@ worker_count          = 3
 # Storage Configuration
 manager_root_volume_size = 30
 worker_root_volume_size  = 30
+
+# SSH Key Configuration
+# Name of existing EC2 key pair in your AWS account
+# The private key should be stored in GitHub Actions secrets as SSH_PRIVATE_KEY
+ssh_key_name = "key"

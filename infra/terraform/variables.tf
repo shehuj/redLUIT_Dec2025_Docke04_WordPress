@@ -68,3 +68,9 @@ variable "worker_root_volume_size" {
   type        = number
   default     = 30
 }
+
+variable "ssh_key_name" {
+  description = "Name of existing AWS EC2 key pair for SSH access"
+  type        = string
+  default     = "key"
+}
