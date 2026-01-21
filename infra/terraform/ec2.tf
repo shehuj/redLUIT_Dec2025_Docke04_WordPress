@@ -2,7 +2,7 @@
 resource "aws_instance" "swarm_manager" {
   ami           = data.aws_ami.ubuntu.id
   instance_type = var.manager_instance_type
-  key_name      = aws_key_pair.swarm_key.key_name
+  key_name      = data.aws_key_pair.swarm_key.key_name
 
   subnet_id                   = aws_subnet.public[0].id
   vpc_security_group_ids      = [aws_security_group.swarm_manager.id]
@@ -35,7 +35,7 @@ resource "aws_instance" "swarm_worker" {
 
   ami           = data.aws_ami.ubuntu.id
   instance_type = var.worker_instance_type
-  key_name      = aws_key_pair.swarm_key.key_name
+  key_name      = data.aws_key_pair.swarm_key.key_name
 
   subnet_id                   = aws_subnet.public[count.index % length(aws_subnet.public)].id
   vpc_security_group_ids      = [aws_security_group.swarm_worker.id]
