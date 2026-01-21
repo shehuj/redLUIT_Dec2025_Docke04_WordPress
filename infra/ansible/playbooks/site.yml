@@ -14,6 +14,12 @@
   roles:
     - swarm-init
 
+- name: Install additional Swarm tools
+  hosts: swarm
+  become: true
+  roles:
+    - swarm-tools
+
 - name: Create Docker secrets on manager
   hosts: swarm_managers
   become: true

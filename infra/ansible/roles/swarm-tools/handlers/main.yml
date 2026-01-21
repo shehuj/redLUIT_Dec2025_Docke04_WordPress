@@ -1,0 +1,9 @@
+---
+# Handlers for swarm-tools role
+
+- name: restart portainer
+  community.docker.docker_swarm_service:
+    name: portainer
+    state: present
+    force_update: true
+  when: inventory_hostname in groups['swarm_managers']
